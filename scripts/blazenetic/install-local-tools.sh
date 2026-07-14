@@ -17,8 +17,9 @@ source "$SCRIPT_DIR/lib/common.sh"
 usage() {
   cat >&2 <<'EOF'
 Usage: install-local-tools.sh [--doctor]
-  Symlink t3b* commands into ~/.local/bin and install the KDE launcher into
-  ~/.local/share/applications. Idempotent and safe to re-run.
+  Symlink t3b* commands into ~/.local/bin, install the KDE launcher into
+  ~/.local/share/applications, disable push on the upstream remote, and install
+  a pre-push hook that refuses pushes to pingdotgg/t3code. Idempotent.
     --doctor   run t3b-doctor after installing
 EOF
 }
@@ -86,6 +87,38 @@ else
   t3b::status WARN "Desktop template not found, skipping launcher: $DESKTOP_SRC"
 fi
 
+# --- git: fork-only push topology -------------------------------------------
+t3b::heading "Git remotes (fork push / upstream fetch-only)"
+if t3b::ensure_fork_remotes "$REPO_ROOT"; then
+  t3b::status OK "origin -> Blazenetic fork; upstream push disabled"
+else
+  t3b::status FAIL "could not enforce fork-only remotes — fix manually (see t3b-doctor)"
+fi
+
+# Install pre-push guard. Never overwrite an unrelated custom hook.
+HOOK_SRC="$SCRIPT_DIR/hooks/pre-push"
+HOOK_DST="$REPO_ROOT/.git/hooks/pre-push"
+if [[ -f "$HOOK_SRC" && -d "$REPO_ROOT/.git/hooks" ]]; then
+  chmod +x "$HOOK_SRC"
+  if [[ -e "$HOOK_DST" && ! -L "$HOOK_DST" ]] && ! grep -q 'pingdotgg/t3code' "$HOOK_DST" 2>/dev/null; then
+    t3b::status WARN "pre-push hook exists and is not ours — leaving untouched: $HOOK_DST"
+  else
+    ln -sfn "$HOOK_SRC" "$HOOK_DST"
+    t3b::status OK "pre-push hook installed (blocks upstream pushes)"
+  fi
+else
+  t3b::status WARN "could not install pre-push hook (missing source or .git/hooks)"
+fi
+
+# Prefer gh PRs against the fork, not the upstream parent.
+if t3b::have gh; then
+  if gh -C "$REPO_ROOT" repo set-default Blazenetic/t3code >/dev/null 2>&1; then
+    t3b::status OK "gh default repo: Blazenetic/t3code"
+  else
+    t3b::status INFO "gh present but could not set default repo (auth/network) — PRs: use --repo Blazenetic/t3code"
+  fi
+fi
+
 # --- PATH advice (never edits shell files) ----------------------------------
 case ":$PATH:" in
   *":$BIN_DIR:"*) : ;;
@@ -96,7 +129,7 @@ case ":$PATH:" in
     ;;
 esac
 
-t3b::info "Install complete."
+t3b::info "Install complete. Push only to origin; upstream is fetch-only."
 if [[ "$run_doctor" -eq 1 ]]; then
   t3b::heading "Running t3b-doctor"
   "$SCRIPT_DIR/t3b-doctor" || true

@@ -21,8 +21,6 @@ _dir="$(dirname "$_self")"
 # shellcheck source=lib/common.sh
 source "$_dir/lib/common.sh"
 
-UPSTREAM_URL="https://github.com/pingdotgg/t3code.git"
-
 usage() {
   cat >&2 <<'EOF'
 Usage: t3b-sync [--merge] [--no-check]
@@ -31,7 +29,7 @@ Usage: t3b-sync [--merge] [--no-check]
     --merge     merge main into blazenetic instead of rebasing (shared-branch mode)
     --no-check  skip t3b-check after integration (discouraged)
   Never pushes automatically. Prints the exact push commands for you to run
-  after review.
+  after review. Upstream is fetch-only; only origin (the fork) may receive pushes.
 EOF
 }
 
@@ -54,17 +52,11 @@ branch="$(t3b::default_branch)"
 # 1. clean working tree
 t3b::require_clean "$repo" || exit 1
 
-# 2. verify remotes
-if ! git -C "$repo" remote get-url origin >/dev/null 2>&1; then
-  t3b::die "No 'origin' remote. Expected the fork: https://github.com/Blazenetic/t3code"
-fi
-if ! git -C "$repo" remote get-url upstream >/dev/null 2>&1; then
-  t3b::err "No 'upstream' remote. Add it with:"
-  t3b::die "    git -C \"$repo\" remote add upstream $UPSTREAM_URL"
-fi
+# 2. verify remotes — origin = fork (push), upstream = fetch-only
+t3b::ensure_fork_remotes "$repo" || exit 1
 
-# 3. fetch
-t3b::info "Fetching origin and upstream..."
+# 3. fetch (never push to upstream)
+t3b::info "Fetching origin and upstream (upstream is fetch-only)..."
 git -C "$repo" fetch origin
 git -C "$repo" fetch upstream
 
@@ -143,7 +135,8 @@ fi
 # 9. print next steps — never executed automatically
 cat >&2 <<EOF
 
-${T3B_C_GREEN}Sync succeeded.${T3B_C_RESET} Nothing has been pushed. Review, then run:
+${T3B_C_GREEN}Sync succeeded.${T3B_C_RESET} Nothing has been pushed.
+Push ONLY to origin (Blazenetic fork). Upstream push is disabled. Review, then:
 
   # update the fork's clean mirror (fast-forward):
   git -C "$repo" push origin main
@@ -151,6 +144,7 @@ ${T3B_C_GREEN}Sync succeeded.${T3B_C_RESET} Nothing has been pushed. Review, the
   # publish the rebased downstream branch (rewrites history — review first):
   git -C "$repo" push --force-with-lease origin $branch
 
+Never run: git push upstream ...
 Backup of the pre-sync branch: $backup
 (Delete it once you have confirmed everything is good:
   git -C "$repo" branch -D $backup )

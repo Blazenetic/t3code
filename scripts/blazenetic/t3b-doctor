@@ -50,18 +50,40 @@ if [[ -d "$repo" ]] && git -C "$repo" rev-parse --is-inside-work-tree >/dev/null
   else
     t3b::status WARN "Working tree: dirty (uncommitted changes present)"
   fi
-  # remotes
+  # remotes — origin must be the fork; upstream must be fetch-only
   if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
-    t3b::status OK "origin:   $(git -C "$repo" remote get-url origin)"
+    origin_url="$(git -C "$repo" remote get-url origin)"
+    if t3b::is_fork_url "$origin_url"; then
+      t3b::status OK "origin:   $origin_url  (fork — push target)"
+    else
+      t3b::status FAIL "origin:   $origin_url  (expected Blazenetic/t3code)"
+      note "Fix origin: git -C \"$repo\" remote set-url origin $T3B_FORK_ORIGIN_URL"
+    fi
   else
     t3b::status FAIL "origin remote missing"
-    note "Add origin: git -C \"$repo\" remote add origin https://github.com/Blazenetic/t3code"
+    note "Add origin: git -C \"$repo\" remote add origin $T3B_FORK_ORIGIN_URL"
   fi
   if git -C "$repo" remote get-url upstream >/dev/null 2>&1; then
-    t3b::status OK "upstream: $(git -C "$repo" remote get-url upstream)"
+    upstream_fetch="$(git -C "$repo" remote get-url upstream)"
+    upstream_push="$(git -C "$repo" remote get-url --push upstream 2>/dev/null || true)"
+    t3b::status OK "upstream fetch: $upstream_fetch"
+    if t3b::upstream_push_disabled "$repo"; then
+      t3b::status OK "upstream push: $upstream_push  (disabled — fetch-only)"
+    else
+      t3b::status FAIL "upstream push: $upstream_push  (MUST be disabled)"
+      note "Disable upstream push: git -C \"$repo\" remote set-url --push upstream $T3B_UPSTREAM_PUSH_DISABLED"
+      note "Or re-run: scripts/blazenetic/install-local-tools.sh"
+    fi
   else
     t3b::status WARN "upstream remote missing"
-    note "Add upstream: git -C \"$repo\" remote add upstream https://github.com/pingdotgg/t3code.git"
+    note "Add fetch-only upstream: git -C \"$repo\" remote add upstream $T3B_UPSTREAM_URL && git -C \"$repo\" remote set-url --push upstream $T3B_UPSTREAM_PUSH_DISABLED"
+  fi
+  # pre-push guard
+  if [[ -x "$repo/.git/hooks/pre-push" ]] && grep -q 'pingdotgg/t3code' "$repo/.git/hooks/pre-push" 2>/dev/null; then
+    t3b::status OK "pre-push hook: blocks pushes to upstream"
+  else
+    t3b::status WARN "pre-push hook: missing or not the Blazenetic guard"
+    note "Install guard: scripts/blazenetic/install-local-tools.sh"
   fi
   # divergence (best-effort; needs a prior fetch to be meaningful)
   if ab="$(t3b::ahead_behind "$repo" main upstream/main 2>/dev/null)"; then

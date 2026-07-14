@@ -59,8 +59,21 @@ if [[ -f "$DESKTOP_DST" ]]; then
   fi
 fi
 
+# Remove our pre-push guard if it is a symlink into this repo (leave remotes alone).
+HOOK_DST="$REPO_ROOT/.git/hooks/pre-push"
+if [[ -L "$HOOK_DST" ]]; then
+  target="$(readlink -f "$HOOK_DST" 2>/dev/null || true)"
+  if [[ "$target" == "$REPO_ROOT"/scripts/blazenetic/hooks/pre-push ]]; then
+    rm -f "$HOOK_DST"
+    t3b::status OK "removed pre-push hook"
+    removed=$((removed + 1))
+  else
+    t3b::status WARN "pre-push hook points elsewhere — leaving it: $target"
+  fi
+fi
+
 if [[ "$removed" -eq 0 ]]; then
   t3b::info "Nothing to remove (already uninstalled)."
 else
-  t3b::info "Removed $removed item(s). Repo and ~/.config/t3code-blazenetic left intact."
+  t3b::info "Removed $removed item(s). Repo, remotes, and ~/.config/t3code-blazenetic left intact."
 fi

@@ -17,25 +17,30 @@ package.
 
 ## Repository model
 
-| Concept      | Meaning                                                     |
-| ------------ | ----------------------------------------------------------- |
-| `origin`     | The fork — `https://github.com/Blazenetic/t3code`           |
-| `upstream`   | Canonical — `https://github.com/pingdotgg/t3code`           |
-| `main`       | Clean mirror of `upstream/main` — **no** Blazenetic commits |
-| `blazenetic` | Long-lived branch holding all downstream customisations     |
+| Concept      | Meaning                                                                  |
+| ------------ | ------------------------------------------------------------------------ |
+| `origin`     | The fork — `https://github.com/Blazenetic/t3code` (**only push target**) |
+| `upstream`   | Canonical — `https://github.com/pingdotgg/t3code` (**fetch only**)       |
+| `main`       | Clean mirror of `upstream/main` — **no** Blazenetic commits              |
+| `blazenetic` | Long-lived branch holding all downstream customisations                  |
+
+Pushing to upstream is disabled (`pushurl = no_push`) and blocked by a
+`pre-push` hook. Sync **from** upstream with `t3b-sync`; publish **to** the
+fork with `git push origin ...` only.
 
 Feature work branches off `blazenetic` as `feature/*`, `fix/*`, `chore/*` and
-merges back. See [UPSTREAM-SYNC.md](UPSTREAM-SYNC.md) for how upstream changes
-flow in, and [CUSTOMISATION-GUIDE.md](CUSTOMISATION-GUIDE.md) for how to keep
-customisations low-conflict.
+merges back. Full git how-to: [GIT.md](GIT.md). Upstream sync:
+[UPSTREAM-SYNC.md](UPSTREAM-SYNC.md). Customisation rules:
+[CUSTOMISATION-GUIDE.md](CUSTOMISATION-GUIDE.md).
 
 ## Quick start
 
 ```bash
-# 1. Clone the fork and add upstream (once):
+# 1. Clone the fork and add fetch-only upstream (once):
 git clone https://github.com/Blazenetic/t3code ~/Code/t3code
 cd ~/Code/t3code
 git remote add upstream https://github.com/pingdotgg/t3code.git
+git remote set-url --push upstream no_push   # never push to upstream
 git fetch upstream
 git branch blazenetic main        # create the downstream branch
 
@@ -73,6 +78,7 @@ reinstall.
 ## Documents
 
 - [SETUP-CACHYOS.md](SETUP-CACHYOS.md) — full first-time setup on CachyOS
+- [GIT.md](GIT.md) — remotes, branches, push/pull, PRs (fork-only)
 - [DAILY-WORKFLOW.md](DAILY-WORKFLOW.md) — start / edit / finish / package
 - [UPSTREAM-SYNC.md](UPSTREAM-SYNC.md) — keeping `main` clean, `t3b-sync`, recovery
 - [CUSTOMISATION-GUIDE.md](CUSTOMISATION-GUIDE.md) — downstream design rules + conflict risk

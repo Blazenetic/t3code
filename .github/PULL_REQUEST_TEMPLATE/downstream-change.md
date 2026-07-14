@@ -1,6 +1,7 @@
 <!--
 Downstream (Blazenetic) change template.
 This is an ADDITIONAL template and does not replace any upstream default.
+Open PRs ONLY on the Blazenetic fork (Blazenetic/t3code) — never against pingdotgg/t3code.
 To use it explicitly, append ?template=downstream-change.md to the PR "compare" URL.
 See docs/blazenetic/CUSTOMISATION-GUIDE.md for the conflict-risk classification.
 -->

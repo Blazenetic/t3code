@@ -1,5 +1,7 @@
 # Daily Workflow
 
+Git remotes, branches, and push rules: [GIT.md](GIT.md).
+
 ## Start work
 
 ```bash
@@ -40,8 +42,12 @@ t3b-check               # vp check + typecheck + tests
 git status
 git add <files>
 git commit -m "feat(blazenetic): ..."
-git push origin blazenetic     # requires your GitHub auth
+git push origin blazenetic     # fork only — never `git push upstream`
 ```
+
+> **Push target.** Only `origin` (`Blazenetic/t3code`) accepts pushes. Upstream
+> is fetch-only. If you use `gh pr create`, pass `--repo Blazenetic/t3code` so
+> the PR stays on the fork (do not open PRs against `pingdotgg/t3code`).
 
 > **Where changes belong.** Keep downstream-only tooling and docs under
 > `scripts/blazenetic/` and `docs/blazenetic/`. Editing upstream files raises

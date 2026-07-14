@@ -1,5 +1,7 @@
 # Upstream Sync
 
+Everyday git (remotes, branches, push targets): [GIT.md](GIT.md).
+
 ## Why `main` stays clean
 
 `main` is a **pure mirror of `upstream/main`** and must never contain
@@ -7,20 +9,33 @@ Blazenetic-specific commits. Keeping it clean means we can always fast-forward
 it to the latest upstream without conflicts, and rebase our `blazenetic` branch
 on top. All customisations live on `blazenetic`.
 
+## Push policy (non-negotiable)
+
+| Remote     | Role                                  | Allowed ops      |
+| ---------- | ------------------------------------- | ---------------- |
+| `origin`   | Blazenetic fork (`Blazenetic/t3code`) | fetch + **push** |
+| `upstream` | Canonical (`pingdotgg/t3code`)        | **fetch only**   |
+
+Upstream's push URL is set to `no_push`, and a local `pre-push` hook refuses
+any push whose target is `pingdotgg/t3code`. Do **not** open PRs against
+upstream; keep all work inside the fork (`gh pr create --repo Blazenetic/t3code`
+if needed).
+
 ## What `t3b-sync` does
 
 Default mode is **rebase**:
 
 1. Requires a clean working tree (refuses to run otherwise).
-2. Verifies `origin` and `upstream` remotes exist.
-3. Fetches `origin` and `upstream`.
+2. Verifies remotes: `origin` is the Blazenetic fork; `upstream` is fetch-only
+   (disables upstream push if needed).
+3. Fetches `origin` and `upstream` (never pushes).
 4. Verifies local `main` has **no** commits absent from `upstream/main`. If it
    does, it stops and tells you to move them to `blazenetic` first.
 5. Creates a backup ref: `backup/blazenetic-before-sync-YYYYMMDD-HHMMSS`.
 6. Fast-forwards local `main` to `upstream/main` (`--ff-only`).
 7. Rebases `blazenetic` onto `main`.
 8. Runs `t3b-check` (unless `--no-check`).
-9. Prints — **but never runs** — the push commands.
+9. Prints — **but never runs** — the **origin-only** push commands.
 
 ```bash
 t3b-sync                 # rebase mode (default)
@@ -33,6 +48,7 @@ t3b-sync --no-check      # skip validation (discouraged)
 - Never deletes uncommitted work.
 - Never uses plain `git push --force`.
 - Never auto-pushes the rebased branch.
+- Never pushes to `upstream` (fetch-only remote + pre-push guard).
 - Always leaves a recoverable pre-sync ref.
 
 ## Rebase vs merge
@@ -49,11 +65,14 @@ t3b-sync --no-check      # skip validation (discouraged)
 `t3b-sync` prints these; run them after reviewing:
 
 ```bash
-# update the fork's clean mirror (fast-forward):
+# update the fork's clean mirror (fast-forward) — ORIGIN ONLY:
 git -C ~/Code/t3code push origin main
 
 # publish the rebased downstream branch (rewrites history — review first):
 git -C ~/Code/t3code push --force-with-lease origin blazenetic
+
+# NEVER:
+# git push upstream ...
 ```
 
 Then, once you've confirmed everything is good, delete the backup ref:

@@ -110,6 +110,19 @@ tooling is self-contained and discoverable in one directory.
 **Consequences.** Fetch works out of the box; pushing uses the user's existing
 GitHub credential helper (or they switch to SSH when convenient).
 
+### Decision: upstream is fetch-only
+
+**Context.** A normal `git remote add upstream …` also enables push. Agents or
+accidental `git push upstream` / `gh pr create` against the parent would bother
+the canonical repo.
+
+**Decision.** Set `remote.upstream.pushurl` to `no_push`, install a local
+`pre-push` hook that refuses `pingdotgg/t3code`, have the installer / `t3b-sync`
+enforce this, and document that GitHub PRs stay on `Blazenetic/t3code`.
+
+**Consequences.** Upstream integration is pull-only (`fetch` + `t3b-sync`). All
+publishes go to the fork via `git push origin …`.
+
 ## Known risks
 
 - Vite+ is a fast-moving external toolchain; command names should be re-verified

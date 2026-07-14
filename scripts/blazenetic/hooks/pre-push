@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Blazenetic fork guard: refuse any push that would contact upstream
+# (pingdotgg/t3code). Fetch/sync from upstream remains allowed.
+#
+# Installed as .git/hooks/pre-push by scripts/blazenetic/install-local-tools.sh.
+# Git invokes this as: pre-push <remote-name> <remote-url>
+set -Eeuo pipefail
+
+remote_name="${1:-}"
+remote_url="${2:-}"
+
+is_upstream_target() {
+  local u=$1
+  [[ -z "$u" ]] && return 1
+  # Disabled push URL used by t3b::ensure_fork_remotes — still treat as blocked.
+  [[ "$u" == "no_push" ]] && return 0
+  [[ "$u" == *pingdotgg/t3code* ]] && return 0
+  [[ "$u" == *github.com:pingdotgg/t3code* ]] && return 0
+  return 1
+}
+
+if [[ "$remote_name" == "upstream" ]] || is_upstream_target "$remote_url"; then
+  cat >&2 <<'EOF'
+[t3b] Refusing push to upstream (pingdotgg/t3code).
+
+This clone may only push to the Blazenetic fork (origin).
+Upstream is fetch-only — use t3b-sync to pull changes in.
+
+Safe publish commands:
+  git push origin main
+  git push --force-with-lease origin blazenetic
+EOF
+  exit 1
+fi
+
+exit 0

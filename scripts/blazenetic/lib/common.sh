@@ -114,6 +114,78 @@ t3b::repo() {
 # t3b::default_branch — echo the configured downstream branch name.
 t3b::default_branch() { printf '%s\n' "${T3B_BRANCH:-blazenetic}"; }
 
+# Canonical remotes for the Blazenetic fork model.
+# upstream is fetch-only; its push URL must be disabled (see ensure_fork_remotes).
+T3B_FORK_ORIGIN_URL="${T3B_FORK_ORIGIN_URL:-https://github.com/Blazenetic/t3code}"
+T3B_UPSTREAM_URL="${T3B_UPSTREAM_URL:-https://github.com/pingdotgg/t3code.git}"
+T3B_UPSTREAM_PUSH_DISABLED="${T3B_UPSTREAM_PUSH_DISABLED:-no_push}"
+
+# t3b::is_fork_url <url> — true if the URL points at Blazenetic/t3code.
+t3b::is_fork_url() {
+  local u=${1:-}
+  [[ "$u" == *Blazenetic/t3code* ]] || [[ "$u" == *github.com:Blazenetic/t3code* ]]
+}
+
+# t3b::is_upstream_url <url> — true if the URL points at pingdotgg/t3code.
+t3b::is_upstream_url() {
+  local u=${1:-}
+  [[ "$u" == *pingdotgg/t3code* ]] || [[ "$u" == *github.com:pingdotgg/t3code* ]]
+}
+
+# t3b::upstream_push_disabled <repo> — true when upstream cannot receive pushes.
+t3b::upstream_push_disabled() {
+  local repo=$1 push_url
+  push_url="$(git -C "$repo" remote get-url --push upstream 2>/dev/null || true)"
+  [[ -z "$push_url" ]] && return 1
+  [[ "$push_url" == "$T3B_UPSTREAM_PUSH_DISABLED" ]] && return 0
+  # Also treat an empty/disabled sentinel or non-network value as disabled.
+  [[ "$push_url" == "DISABLED" || "$push_url" == "disabled" ]] && return 0
+  # If push URL still points at upstream, it is NOT disabled.
+  t3b::is_upstream_url "$push_url" && return 1
+  # Non-upstream push URL (custom sentinel) counts as disabled.
+  return 0
+}
+
+# t3b::ensure_fork_remotes <repo> — enforce fork-only push topology:
+#   origin  -> Blazenetic/t3code (fetch + push)
+#   upstream -> pingdotgg/t3code (fetch only; push URL = no_push)
+# Mutates local git config only. Never contacts the network.
+t3b::ensure_fork_remotes() {
+  local repo=$1
+  local origin_url upstream_fetch upstream_push
+
+  if ! git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+    t3b::err "No 'origin' remote. Expected the fork: $T3B_FORK_ORIGIN_URL"
+    return 1
+  fi
+  origin_url="$(git -C "$repo" remote get-url origin)"
+  if ! t3b::is_fork_url "$origin_url"; then
+    t3b::err "origin does not point at the Blazenetic fork."
+    t3b::err "  current: $origin_url"
+    t3b::err "  expected: $T3B_FORK_ORIGIN_URL (or SSH equivalent)"
+    t3b::err "Fix: git -C \"$repo\" remote set-url origin $T3B_FORK_ORIGIN_URL"
+    return 1
+  fi
+
+  if ! git -C "$repo" remote get-url upstream >/dev/null 2>&1; then
+    t3b::warn "No 'upstream' remote — adding fetch-only upstream."
+    git -C "$repo" remote add upstream "$T3B_UPSTREAM_URL"
+  fi
+  upstream_fetch="$(git -C "$repo" remote get-url upstream)"
+  if ! t3b::is_upstream_url "$upstream_fetch"; then
+    t3b::err "upstream fetch URL looks wrong: $upstream_fetch"
+    t3b::err "Expected: $T3B_UPSTREAM_URL"
+    return 1
+  fi
+
+  upstream_push="$(git -C "$repo" remote get-url --push upstream 2>/dev/null || true)"
+  if [[ "$upstream_push" != "$T3B_UPSTREAM_PUSH_DISABLED" ]]; then
+    git -C "$repo" remote set-url --push upstream "$T3B_UPSTREAM_PUSH_DISABLED"
+    t3b::info "Disabled push to upstream (fetch-only). Was: ${upstream_push:-unset}"
+  fi
+  return 0
+}
+
 # t3b::branch <repo> — echo the currently checked-out branch (or a detached ref).
 t3b::branch() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null; }
 

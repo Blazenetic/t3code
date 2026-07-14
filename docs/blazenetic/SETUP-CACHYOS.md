@@ -33,13 +33,20 @@ cd ~/Code/t3code
 
 If you keep the repo elsewhere, set `T3B_REPO` (see step 8).
 
-## 3. Remotes
+## 3. Remotes (push only to the fork)
 
 ```bash
 git remote add upstream https://github.com/pingdotgg/t3code.git
+# CRITICAL: disable push to upstream — fetch/sync only, never push
+git remote set-url --push upstream no_push
 git fetch upstream
-git remote -v      # origin -> Blazenetic/t3code, upstream -> pingdotgg/t3code
+git remote -v
+# origin   -> Blazenetic/t3code   (fetch + push)
+# upstream -> pingdotgg/t3code    (fetch only; push = no_push)
 ```
+
+`scripts/blazenetic/install-local-tools.sh` enforces this automatically (and
+installs a pre-push hook that refuses any push to `pingdotgg/t3code`).
 
 > Optional: switch `origin` to SSH if you have keys configured:
 > `git remote set-url origin git@github.com:Blazenetic/t3code.git`

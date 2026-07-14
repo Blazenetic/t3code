@@ -155,6 +155,33 @@ git -C ~/Code/t3code merge --ff-only upstream/main   # if this fails, main has s
 If ff-only fails, `main` has commits that don't belong there — move them to
 `blazenetic` (as above), then re-align.
 
+### Accidentally pushing / opening a PR against upstream
+
+This must never happen. Hardening:
+
+```bash
+# 1. Disable upstream push URL
+git -C ~/Code/t3code remote set-url --push upstream no_push
+
+# 2. Reinstall local tools (also installs the pre-push guard)
+~/Code/t3code/scripts/blazenetic/install-local-tools.sh --doctor
+
+# 3. Confirm
+git -C ~/Code/t3code remote -v
+# upstream ... (fetch)
+# upstream  no_push (push)
+```
+
+If a PR was opened against `pingdotgg/t3code`, close it on GitHub and open any
+needed PR on the fork instead (`gh pr create --repo Blazenetic/t3code`).
+
+Safe pushes are always:
+
+```bash
+git push origin main
+git push --force-with-lease origin blazenetic
+```
+
 ## Local integration
 
 ### Wrapper missing from PATH
