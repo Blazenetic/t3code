@@ -49,6 +49,17 @@ t3b-sync --no-check      # skip validation (discouraged)
 `t3b-sync` prints these; run them after reviewing:
 
 ```bash
+t3b-publish              # pushes origin main + origin blazenetic only
+t3b-publish --dry-run    # optional preview
+```
+
+`t3b-publish` never touches upstream. It refuses to run if `origin` looks like
+the canonical repo, or if `upstream` has a real push URL (keep
+`git remote set-url --push upstream no_push`).
+
+Equivalent manual commands:
+
+```bash
 # update the fork's clean mirror (fast-forward):
 git -C ~/Code/t3code push origin main
 

@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# t3b-publish — push the post-sync fork state to origin only.
+#
+# After `t3b-sync`, run this to update your GitHub fork:
+#   - origin/main       (fast-forward mirror of upstream)
+#   - origin/blazenetic (force-with-lease; rebase rewrote history)
+#
+# Safeguards:
+#   - Never pushes to `upstream` (refuses if upstream push URL is set)
+#   - Only pushes to `origin`
+#   - Refuses if origin looks like the canonical upstream repo
+#   - Uses --force-with-lease (never plain --force)
+#   - Never auto-deletes backup refs
+set -Eeuo pipefail
+
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+_dir="$(dirname "$_self")"
+# shellcheck source=lib/common.sh
+source "$_dir/lib/common.sh"
+
+ORIGIN_EXPECTED_HINT="Blazenetic/t3code"
+UPSTREAM_FORBIDDEN_HINT="pingdotgg/t3code"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3b-publish [--dry-run]
+  Publish local main + blazenetic to your fork (origin only).
+    --dry-run   show what would be pushed; do not push
+  Never touches upstream. Safe to run after a successful t3b-sync.
+EOF
+}
+
+dry_run=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --dry-run) dry_run=1 ;;
+    *)         t3b::err "Unknown option: $1"; usage; exit 2 ;;
+  esac
+  shift
+done
+
+t3b::load_env
+repo="$(t3b::repo)"
+branch="$(t3b::default_branch)"
+
+# --- remotes: origin required, upstream must not be pushable ---------------
+if ! git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+  t3b::die "No 'origin' remote. Expected your fork: https://github.com/$ORIGIN_EXPECTED_HINT"
+fi
+
+origin_url="$(git -C "$repo" remote get-url --push origin 2>/dev/null \
+  || git -C "$repo" remote get-url origin)"
+case "$origin_url" in
+  *"$UPSTREAM_FORBIDDEN_HINT"*)
+    t3b::die "origin points at upstream ($UPSTREAM_FORBIDDEN_HINT). Refusing to push."
+    ;;
+esac
+
+if git -C "$repo" remote get-url upstream >/dev/null 2>&1; then
+  upstream_push="$(git -C "$repo" remote get-url --push upstream 2>/dev/null || true)"
+  # git remote set-url --push upstream no_push stores the literal "no_push"
+  if [[ -n "$upstream_push" && "$upstream_push" != "no_push" ]]; then
+    t3b::err "upstream has a real push URL: $upstream_push"
+    t3b::err "Disable it so you cannot accidentally contact upstream:"
+    t3b::die "    git -C \"$repo\" remote set-url --push upstream no_push"
+  fi
+fi
+
+# --- local refs must exist -------------------------------------------------
+git -C "$repo" rev-parse --verify --quiet main >/dev/null \
+  || t3b::die "Local 'main' branch not found."
+git -C "$repo" rev-parse --verify --quiet "$branch" >/dev/null \
+  || t3b::die "Local '$branch' branch not found."
+
+# Fetch origin so --force-with-lease compares against current remote tips.
+t3b::info "Fetching origin..."
+if [[ "$dry_run" -eq 0 ]]; then
+  git -C "$repo" fetch origin
+else
+  t3b::info "(dry-run) would: git fetch origin"
+fi
+
+main_ab="$(t3b::ahead_behind "$repo" main origin/main 2>/dev/null || true)"
+branch_ab="$(t3b::ahead_behind "$repo" "$branch" "origin/$branch" 2>/dev/null || true)"
+t3b::info "main vs origin/main (ahead behind): ${main_ab:-origin/main missing}"
+t3b::info "$branch vs origin/$branch (ahead behind): ${branch_ab:-origin/$branch missing}"
+
+if [[ "$dry_run" -eq 1 ]]; then
+  cat >&2 <<EOF
+
+${T3B_C_YELLOW}Dry run — no pushes performed.${T3B_C_RESET}
+Would run:
+
+  git -C "$repo" push origin main
+  git -C "$repo" push --force-with-lease origin $branch
+
+Upstream is never contacted for push.
+EOF
+  exit 0
+fi
+
+t3b::info "Pushing origin main (fast-forward mirror)..."
+git -C "$repo" push origin main
+
+t3b::info "Pushing origin $branch (--force-with-lease)..."
+git -C "$repo" push --force-with-lease origin "$branch"
+
+cat >&2 <<EOF
+
+${T3B_C_GREEN}Publish succeeded.${T3B_C_RESET} Fork updated at origin only.
+Upstream was not pushed to.
+
+Optional: delete a leftover sync backup once you are happy:
+  git -C "$repo" branch -D backup/${branch}-before-sync-YYYYMMDD-HHMMSS
+EOF

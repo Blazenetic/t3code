@@ -69,7 +69,8 @@ resolves on PATH even though system Node comes from an ephemeral fnm path.
 
 `main` = clean upstream mirror; `blazenetic` = customisations; feature branches
 off `blazenetic`. Upstream integration via `t3b-sync` (rebase default, `--merge`
-optional), which always leaves a `backup/...` ref and never auto-pushes. See
+optional), which always leaves a `backup/...` ref and never auto-pushes. Publish
+to the fork with `t3b-publish` (origin only; never upstream). See
 [UPSTREAM-SYNC.md](UPSTREAM-SYNC.md).
 
 ## Decisions (ADRs)
