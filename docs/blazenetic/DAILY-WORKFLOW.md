@@ -51,10 +51,12 @@ git push origin blazenetic     # requires your GitHub auth
 
 ```bash
 t3b-sync                # fetch upstream, fast-forward main, rebase blazenetic, validate
+t3b-publish             # after review: push main + blazenetic to your fork only
 ```
 
-It never pushes automatically; it prints the exact push commands to run after
-review. Full details and recovery: [UPSTREAM-SYNC.md](UPSTREAM-SYNC.md).
+`t3b-sync` never pushes automatically. `t3b-publish` only updates `origin`
+(Blazenetic fork) and never touches upstream. Full details and recovery:
+[UPSTREAM-SYNC.md](UPSTREAM-SYNC.md).
 
 ## Build a stable package (separate from daily dev)
 
@@ -81,5 +83,6 @@ this. Build it only to produce a shippable package.
 | `t3b-check --desktop` | default + `vp run test:desktop-smoke`             |
 | `t3b-check --full`    | all checks (no release build)                     |
 | `t3b-sync`            | upstream integration (rebase; `--merge` optional) |
+| `t3b-publish`         | push main + blazenetic to origin only             |
 | `t3b-doctor`          | environment diagnostics                           |
 | `t3b-shell`           | repo shell                                        |

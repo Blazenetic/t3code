@@ -36,7 +36,7 @@ CFG_DIR="$HOME/.config/t3code-blazenetic"
 DESKTOP_SRC="$REPO_ROOT/packaging/linux/t3code-blazenetic-dev.desktop"
 DESKTOP_DST="$APP_DIR/t3code-blazenetic-dev.desktop"
 
-WRAPPERS=(t3b t3b-web t3b-desktop t3b-sync t3b-check t3b-doctor t3b-shell)
+WRAPPERS=(t3b t3b-web t3b-desktop t3b-sync t3b-publish t3b-check t3b-doctor t3b-shell)
 
 t3b::info "Repo root:   $REPO_ROOT"
 t3b::info "Install dir: $BIN_DIR"

@@ -143,12 +143,13 @@ fi
 # 9. print next steps — never executed automatically
 cat >&2 <<EOF
 
-${T3B_C_GREEN}Sync succeeded.${T3B_C_RESET} Nothing has been pushed. Review, then run:
+${T3B_C_GREEN}Sync succeeded.${T3B_C_RESET} Nothing has been pushed. Review, then publish to your fork:
 
-  # update the fork's clean mirror (fast-forward):
+  t3b-publish              # pushes origin main + origin $branch only
+  t3b-publish --dry-run    # preview without pushing
+
+(Equivalent manual commands:)
   git -C "$repo" push origin main
-
-  # publish the rebased downstream branch (rewrites history — review first):
   git -C "$repo" push --force-with-lease origin $branch
 
 Backup of the pre-sync branch: $backup
