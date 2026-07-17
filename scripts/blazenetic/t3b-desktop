@@ -7,7 +7,7 @@
 # dev server's hot reload.
 #
 # Wayland: launched natively. No ozone/X11 flags are forced. If you hit a
-# Wayland-specific rendering issue, see docs/blazenetic/TROUBLESHOOTING.md for
+# Wayland-specific rendering issue, see ~/Code/blazenetic/TROUBLESHOOTING.md for
 # optional, opt-in overrides — they are intentionally NOT hard-coded here.
 #
 # Signal handling: the dev command is started in its own process group (bash

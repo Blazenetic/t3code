@@ -591,17 +591,23 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   noBrowser: Flag.boolean("no-browser").pipe(
     Flag.withDescription("Browser auto-open toggle (equivalent to T3CODE_NO_BROWSER)."),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
     Flag.withFallbackConfig(optionalBooleanConfig("T3CODE_NO_BROWSER")),
   ),
   autoBootstrapProjectFromCwd: Flag.boolean("auto-bootstrap-project-from-cwd").pipe(
     Flag.withDescription(
       "Auto-bootstrap toggle (equivalent to T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD).",
     ),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
     Flag.withFallbackConfig(optionalBooleanConfig("T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD")),
   ),
   logWebSocketEvents: Flag.boolean("log-websocket-events").pipe(
     Flag.withDescription("WebSocket event logging toggle (equivalent to T3CODE_LOG_WS_EVENTS)."),
     Flag.withAlias("log-ws-events"),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
     Flag.withFallbackConfig(optionalBooleanConfig("T3CODE_LOG_WS_EVENTS")),
   ),
   host: Flag.string("host").pipe(
