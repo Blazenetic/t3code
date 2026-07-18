@@ -18,9 +18,6 @@ _dir="$(dirname "$_self")"
 # shellcheck source=lib/common.sh
 source "$_dir/lib/common.sh"
 
-ORIGIN_EXPECTED_HINT="Blazenetic/t3code"
-UPSTREAM_FORBIDDEN_HINT="pingdotgg/t3code"
-
 usage() {
   cat >&2 <<'EOF'
 Usage: t3b-publish [--dry-run]
@@ -45,27 +42,8 @@ repo="$(t3b::repo)"
 branch="$(t3b::default_branch)"
 
 # --- remotes: origin required, upstream must not be pushable ---------------
-if ! git -C "$repo" remote get-url origin >/dev/null 2>&1; then
-  t3b::die "No 'origin' remote. Expected your fork: https://github.com/$ORIGIN_EXPECTED_HINT"
-fi
-
-origin_url="$(git -C "$repo" remote get-url --push origin 2>/dev/null \
-  || git -C "$repo" remote get-url origin)"
-case "$origin_url" in
-  *"$UPSTREAM_FORBIDDEN_HINT"*)
-    t3b::die "origin points at upstream ($UPSTREAM_FORBIDDEN_HINT). Refusing to push."
-    ;;
-esac
-
-if git -C "$repo" remote get-url upstream >/dev/null 2>&1; then
-  upstream_push="$(git -C "$repo" remote get-url --push upstream 2>/dev/null || true)"
-  # git remote set-url --push upstream no_push stores the literal "no_push"
-  if [[ -n "$upstream_push" && "$upstream_push" != "no_push" ]]; then
-    t3b::err "upstream has a real push URL: $upstream_push"
-    t3b::err "Disable it so you cannot accidentally contact upstream:"
-    t3b::die "    git -C \"$repo\" remote set-url --push upstream no_push"
-  fi
-fi
+t3b::require_origin_pushable "$repo"
+t3b::require_upstream_no_push "$repo"
 
 # --- local refs must exist -------------------------------------------------
 git -C "$repo" rev-parse --verify --quiet main >/dev/null \
