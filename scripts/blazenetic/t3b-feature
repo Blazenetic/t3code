@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+# t3b-feature — manage a long-lived feature/* branch that rides upstream
+# updates via blazenetic without landing on blazenetic until ready.
+#
+# Subcommands:
+#   start [name]  create feature/<name> from blazenetic (default: blazeprovements)
+#   sync          upstream → main → blazenetic → active feature (never pushes)
+#   publish       origin-only: main + blazenetic + active feature
+#   status        active feature + ahead/behind + clean/dirty
+#   use <branch>  point active-feature config at an existing feature/* branch
+#
+# Active feature resolution: T3B_FEATURE_BRANCH → ~/.config/t3code-blazenetic/
+# feature-branch → feature/blazeprovements.
+set -Eeuo pipefail
+
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+_dir="$(dirname "$_self")"
+# shellcheck source=lib/common.sh
+source "$_dir/lib/common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3b-feature <command> [options]
+
+  start [name]         Create feature/<name> from blazenetic and switch to it.
+                       Default name: blazeprovements. Refuses if dirty or exists.
+  sync [--merge] [--no-check]
+                       Integrate upstream like t3b-sync, then rebase the active
+                       feature branch onto blazenetic. Never pushes.
+  publish [--dry-run]  Push origin main, blazenetic, and the active feature
+                       (--force-with-lease for rewritten branches). Origin only.
+  status               Show active feature, divergence, and working-tree state.
+  use <branch>         Set the active feature to an existing local feature/* branch.
+
+Active feature: T3B_FEATURE_BRANCH env → ~/.config/t3code-blazenetic/feature-branch
+→ feature/blazeprovements.
+EOF
+}
+
+cmd_start() {
+  local name="${1:-blazeprovements}"
+  local repo branch feature
+  t3b::load_env
+  repo="$(t3b::repo)"
+  branch="$(t3b::default_branch)"
+  feature="$(t3b::normalize_feature_branch "$name")"
+
+  t3b::require_clean "$repo" || exit 1
+
+  git -C "$repo" rev-parse --verify --quiet "$branch" >/dev/null \
+    || t3b::die "Downstream branch '$branch' not found."
+
+  if git -C "$repo" rev-parse --verify --quiet "$feature" >/dev/null; then
+    t3b::die "Branch already exists: $feature (use: t3b-feature use $feature)"
+  fi
+
+  t3b::info "Creating $feature from $branch..."
+  git -C "$repo" switch -c "$feature" "$branch"
+  t3b::set_feature_branch "$feature" >/dev/null
+  t3b::info "Active feature set to $feature (config: $T3B_FEATURE_CONFIG_FILE)"
+
+  cat >&2 <<EOF
+
+${T3B_C_GREEN}Feature branch ready.${T3B_C_RESET} You are on $feature.
+
+Daily during the feature:
+  t3b-feature sync
+  t3b-feature publish   # after review; origin only
+EOF
+}
+
+cmd_sync() {
+  local do_merge=0 do_check=1
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)  usage; exit 0 ;;
+      --merge)    do_merge=1 ;;
+      --no-check) do_check=0 ;;
+      *)          t3b::err "Unknown option: $1"; usage; exit 2 ;;
+    esac
+    shift
+  done
+
+  local repo branch feature backup_feature sync_args=()
+  t3b::load_env
+  repo="$(t3b::repo)"
+  branch="$(t3b::default_branch)"
+  feature="$(t3b::feature_branch)"
+
+  t3b::require_clean "$repo" || exit 1
+
+  git -C "$repo" rev-parse --verify --quiet "$feature" >/dev/null \
+    || t3b::die "Active feature branch not found locally: $feature
+Create it with:  t3b-feature start ${feature#feature/}
+Or point config at an existing branch:  t3b-feature use $feature"
+
+  # 1–8: same upstream integration as t3b-sync (ff main, rebase/merge blazenetic).
+  if [[ "$do_merge" -eq 1 ]]; then sync_args+=(--merge); fi
+  if [[ "$do_check" -eq 0 ]]; then sync_args+=(--no-check); fi
+  t3b::info "Running baseline upstream integration (t3b-sync${sync_args[*]:+ ${sync_args[*]}})..."
+  if ! "$_dir/t3b-sync" "${sync_args[@]+"${sync_args[@]}"}"; then
+    t3b::die "Baseline sync failed. Fix that first; feature branch was not rebased."
+  fi
+
+  # After t3b-sync we are on blazenetic with a clean tree (check may have run).
+  t3b::require_clean "$repo" || exit 1
+
+  # Flatten feature/foo → feature-foo so the backup ref has a single path segment.
+  backup_feature="backup/$(printf '%s' "$feature" | tr '/' '-')-before-sync-$(date +%Y%m%d-%H%M%S)"
+  git -C "$repo" branch "$backup_feature" "$feature"
+  t3b::info "Created feature backup ref: $backup_feature"
+
+  t3b::info "Rebasing $feature onto $branch..."
+  git -C "$repo" switch "$feature"
+  if ! git -C "$repo" rebase "$branch"; then
+    t3b::err "Rebase conflict on $feature. Resolve, then:"
+    t3b::err "    git -C \"$repo\" status"
+    t3b::err "    git -C \"$repo\" add <resolved-files>"
+    t3b::err "    git -C \"$repo\" rebase --continue"
+    t3b::err "  or abort:  git -C \"$repo\" rebase --abort"
+    t3b::err "Feature backup ref: $backup_feature"
+    exit 1
+  fi
+  t3b::info "Feature rebase complete on $feature."
+
+  # Optional second validation after the feature rebase (baseline already checked
+  # unless --no-check). Skip if --no-check; otherwise re-run for safety.
+  if [[ "$do_check" -eq 1 ]]; then
+    t3b::info "Re-running t3b-check after feature rebase..."
+    if ! "$_dir/t3b-check"; then
+      t3b::err "Validation failed after feature rebase. Review before pushing."
+      t3b::err "Feature backup: $backup_feature"
+      exit 1
+    fi
+  else
+    t3b::warn "Skipping post-feature validation (--no-check)."
+  fi
+
+  cat >&2 <<EOF
+
+${T3B_C_GREEN}Feature sync succeeded.${T3B_C_RESET} Nothing has been pushed. Review, then:
+
+  t3b-feature publish              # origin main + $branch + $feature
+  t3b-feature publish --dry-run    # preview without pushing
+
+Feature backup of the pre-rebase tip: $backup_feature
+(Also keep the blazenetic backup printed by t3b-sync until you confirm.)
+EOF
+}
+
+cmd_publish() {
+  local dry_run=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --dry-run) dry_run=1 ;;
+      *)         t3b::err "Unknown option: $1"; usage; exit 2 ;;
+    esac
+    shift
+  done
+
+  local repo branch feature main_ab branch_ab feature_ab
+  t3b::load_env
+  repo="$(t3b::repo)"
+  branch="$(t3b::default_branch)"
+  feature="$(t3b::feature_branch)"
+
+  t3b::require_origin_pushable "$repo"
+  t3b::require_upstream_no_push "$repo"
+
+  git -C "$repo" rev-parse --verify --quiet main >/dev/null \
+    || t3b::die "Local 'main' branch not found."
+  git -C "$repo" rev-parse --verify --quiet "$branch" >/dev/null \
+    || t3b::die "Local '$branch' branch not found."
+  git -C "$repo" rev-parse --verify --quiet "$feature" >/dev/null \
+    || t3b::die "Active feature branch not found locally: $feature"
+
+  t3b::info "Fetching origin..."
+  if [[ "$dry_run" -eq 0 ]]; then
+    git -C "$repo" fetch origin
+  else
+    t3b::info "(dry-run) would: git fetch origin"
+  fi
+
+  main_ab="$(t3b::ahead_behind "$repo" main origin/main 2>/dev/null || true)"
+  branch_ab="$(t3b::ahead_behind "$repo" "$branch" "origin/$branch" 2>/dev/null || true)"
+  feature_ab="$(t3b::ahead_behind "$repo" "$feature" "origin/$feature" 2>/dev/null || true)"
+  t3b::info "main vs origin/main (ahead behind): ${main_ab:-origin/main missing}"
+  t3b::info "$branch vs origin/$branch (ahead behind): ${branch_ab:-origin/$branch missing}"
+  t3b::info "$feature vs origin/$feature (ahead behind): ${feature_ab:-origin/$feature missing}"
+
+  if [[ "$dry_run" -eq 1 ]]; then
+    cat >&2 <<EOF
+
+${T3B_C_YELLOW}Dry run — no pushes performed.${T3B_C_RESET}
+Would run:
+
+  git -C "$repo" push origin main
+  git -C "$repo" push --force-with-lease origin $branch
+  git -C "$repo" push --force-with-lease origin $feature
+
+Upstream is never contacted for push.
+EOF
+    exit 0
+  fi
+
+  t3b::info "Pushing origin main (fast-forward mirror)..."
+  git -C "$repo" push origin main
+
+  t3b::info "Pushing origin $branch (--force-with-lease)..."
+  git -C "$repo" push --force-with-lease origin "$branch"
+
+  t3b::info "Pushing origin $feature (--force-with-lease)..."
+  git -C "$repo" push --force-with-lease origin "$feature"
+
+  cat >&2 <<EOF
+
+${T3B_C_GREEN}Feature publish succeeded.${T3B_C_RESET} Fork updated at origin only.
+Upstream was not pushed to.
+EOF
+}
+
+cmd_status() {
+  local repo branch feature current dirty main_ab branch_ab feature_ab origin_ab
+  t3b::load_env
+  repo="$(t3b::repo)"
+  branch="$(t3b::default_branch)"
+  feature="$(t3b::feature_branch)"
+  current="$(t3b::branch "$repo")"
+
+  if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
+    dirty="dirty"
+  else
+    dirty="clean"
+  fi
+
+  t3b::heading "t3b-feature status"
+  t3b::status INFO "repo:           $repo"
+  t3b::status INFO "checked out:    $current"
+  t3b::status INFO "active feature: $feature"
+  if [[ -n "${T3B_FEATURE_BRANCH:-}" ]]; then
+    t3b::status INFO "resolved via:   T3B_FEATURE_BRANCH env"
+  elif [[ -f "$T3B_FEATURE_CONFIG_FILE" ]]; then
+    t3b::status INFO "resolved via:   $T3B_FEATURE_CONFIG_FILE"
+  else
+    t3b::status INFO "resolved via:   default ($T3B_FEATURE_DEFAULT)"
+  fi
+  t3b::status INFO "working tree:   $dirty"
+
+  if git -C "$repo" rev-parse --verify --quiet "$feature" >/dev/null; then
+    feature_ab="$(t3b::ahead_behind "$repo" "$feature" "$branch" 2>/dev/null || true)"
+    t3b::status INFO "$feature vs $branch (ahead behind): ${feature_ab:-unknown}"
+    origin_ab="$(t3b::ahead_behind "$repo" "$feature" "origin/$feature" 2>/dev/null || true)"
+    t3b::status INFO "$feature vs origin/$feature (ahead behind): ${origin_ab:-origin/$feature missing}"
+  else
+    t3b::status WARN "local branch missing: $feature"
+  fi
+
+  if git -C "$repo" rev-parse --verify --quiet "$branch" >/dev/null; then
+    branch_ab="$(t3b::ahead_behind "$repo" "$branch" main 2>/dev/null || true)"
+    t3b::status INFO "$branch vs main (ahead behind): ${branch_ab:-unknown}"
+  fi
+  if git -C "$repo" rev-parse --verify --quiet main >/dev/null \
+     && git -C "$repo" rev-parse --verify --quiet upstream/main >/dev/null; then
+    main_ab="$(t3b::ahead_behind "$repo" main upstream/main 2>/dev/null || true)"
+    t3b::status INFO "main vs upstream/main (ahead behind): ${main_ab:-unknown}"
+  fi
+}
+
+cmd_use() {
+  local raw="${1:-}"
+  local repo feature
+  if [[ -z "$raw" ]]; then
+    t3b::err "Missing branch argument."
+    usage
+    exit 2
+  fi
+  t3b::load_env
+  repo="$(t3b::repo)"
+  feature="$(t3b::normalize_feature_branch "$raw")"
+
+  git -C "$repo" rev-parse --verify --quiet "$feature" >/dev/null \
+    || t3b::die "Local branch not found: $feature"
+
+  t3b::set_feature_branch "$feature" >/dev/null
+  t3b::info "Active feature set to $feature"
+  t3b::info "Config: $T3B_FEATURE_CONFIG_FILE"
+}
+
+# --- dispatch ----------------------------------------------------------------
+cmd="${1:-}"
+if [[ -z "$cmd" || "$cmd" == "-h" || "$cmd" == "--help" ]]; then
+  usage
+  exit 0
+fi
+shift || true
+
+case "$cmd" in
+  start)   cmd_start "$@" ;;
+  sync)    cmd_sync "$@" ;;
+  publish) cmd_publish "$@" ;;
+  status)  cmd_status "$@" ;;
+  use)     cmd_use "$@" ;;
+  *)       t3b::err "Unknown command: $cmd"; usage; exit 2 ;;
+esac

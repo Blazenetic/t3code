@@ -152,6 +152,96 @@ t3b::ahead_behind() {
 }
 
 # ---------------------------------------------------------------------------
+# Publish / remote push guards (origin-only; never upstream)
+# ---------------------------------------------------------------------------
+
+# Canonical fork / upstream identity hints used by publish wrappers.
+T3B_ORIGIN_EXPECTED_HINT="${T3B_ORIGIN_EXPECTED_HINT:-Blazenetic/t3code}"
+T3B_UPSTREAM_FORBIDDEN_HINT="${T3B_UPSTREAM_FORBIDDEN_HINT:-pingdotgg/t3code}"
+
+# t3b::require_origin_pushable <repo> — die unless origin exists and does not
+# point at the canonical upstream repository.
+t3b::require_origin_pushable() {
+  local repo=$1
+  local origin_url
+  if ! git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+    t3b::die "No 'origin' remote. Expected your fork: https://github.com/$T3B_ORIGIN_EXPECTED_HINT"
+  fi
+  origin_url="$(git -C "$repo" remote get-url --push origin 2>/dev/null \
+    || git -C "$repo" remote get-url origin)"
+  case "$origin_url" in
+    *"$T3B_UPSTREAM_FORBIDDEN_HINT"*)
+      t3b::die "origin points at upstream ($T3B_UPSTREAM_FORBIDDEN_HINT). Refusing to push."
+      ;;
+  esac
+}
+
+# t3b::require_upstream_no_push <repo> — if upstream exists, die unless its
+# push URL is the literal "no_push" sentinel.
+t3b::require_upstream_no_push() {
+  local repo=$1
+  local upstream_push
+  if ! git -C "$repo" remote get-url upstream >/dev/null 2>&1; then
+    return 0
+  fi
+  upstream_push="$(git -C "$repo" remote get-url --push upstream 2>/dev/null || true)"
+  # git remote set-url --push upstream no_push stores the literal "no_push"
+  if [[ -n "$upstream_push" && "$upstream_push" != "no_push" ]]; then
+    t3b::err "upstream has a real push URL: $upstream_push"
+    t3b::err "Disable it so you cannot accidentally contact upstream:"
+    t3b::die "    git -C \"$repo\" remote set-url --push upstream no_push"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Long-lived feature-branch helpers (t3b-feature)
+# ---------------------------------------------------------------------------
+
+T3B_FEATURE_CONFIG_DIR="${T3B_FEATURE_CONFIG_DIR:-$HOME/.config/t3code-blazenetic}"
+T3B_FEATURE_CONFIG_FILE="${T3B_FEATURE_CONFIG_FILE:-$T3B_FEATURE_CONFIG_DIR/feature-branch}"
+T3B_FEATURE_DEFAULT="${T3B_FEATURE_DEFAULT:-feature/blazeprovements}"
+
+# t3b::normalize_feature_branch <name-or-ref> — echo a feature/<name> ref.
+# Accepts "blazeprovements" or "feature/blazeprovements".
+t3b::normalize_feature_branch() {
+  local raw=$1
+  if [[ -z "$raw" ]]; then
+    t3b::die "Feature branch name is required."
+  fi
+  case "$raw" in
+    feature/*) printf '%s\n' "$raw" ;;
+    */*)       t3b::die "Feature branch must be feature/<name> (got: $raw)" ;;
+    *)         printf 'feature/%s\n' "$raw" ;;
+  esac
+}
+
+# t3b::feature_branch — resolve active feature: env → config file → default.
+t3b::feature_branch() {
+  local from_file=""
+  if [[ -n "${T3B_FEATURE_BRANCH:-}" ]]; then
+    t3b::normalize_feature_branch "$T3B_FEATURE_BRANCH"
+    return 0
+  fi
+  if [[ -f "$T3B_FEATURE_CONFIG_FILE" ]]; then
+    from_file="$(tr -d '[:space:]' < "$T3B_FEATURE_CONFIG_FILE")"
+    if [[ -n "$from_file" ]]; then
+      t3b::normalize_feature_branch "$from_file"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$T3B_FEATURE_DEFAULT"
+}
+
+# t3b::set_feature_branch <feature/name> — persist active feature config.
+t3b::set_feature_branch() {
+  local feature
+  feature="$(t3b::normalize_feature_branch "$1")"
+  mkdir -p "$T3B_FEATURE_CONFIG_DIR"
+  printf '%s\n' "$feature" > "$T3B_FEATURE_CONFIG_FILE"
+  printf '%s\n' "$feature"
+}
+
+# ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
 
