@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# t3b-upstream — read-only snapshot of fork/upstream topology.
+set -Eeuo pipefail
+
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+# shellcheck source=lib/common.sh
+source "$(dirname "$_self")/lib/common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3b-upstream [--no-fetch] [--log N]
+  Fetch origin/upstream, then report fork topology without switching,
+  integrating, deleting refs, or pushing. --no-fetch uses local tracking refs.
+EOF
+}
+
+fetch=1
+log_count=8
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --no-fetch) fetch=0 ;;
+    --log)
+      shift
+      [[ "${1:-}" =~ ^[0-9]+$ ]] || t3b::die "--log requires a non-negative integer."
+      log_count=$1
+      ;;
+    *) t3b::err "Unknown option: $1"; usage; exit 2 ;;
+  esac
+  shift
+done
+
+t3b::load_env
+repo="$(t3b::repo)"
+branch="$(t3b::default_branch)"
+feature="$(t3b::feature_branch)"
+exit_status=0
+
+if [[ "$fetch" == "1" ]]; then
+  for remote in origin upstream; do
+    if git -C "$repo" remote get-url "$remote" >/dev/null 2>&1; then
+      t3b::info "Fetching $remote (remote-tracking refs only)..."
+      git -C "$repo" fetch "$remote" || exit_status=1
+    else
+      t3b::err "Remote missing: $remote"
+      exit_status=1
+    fi
+  done
+fi
+
+ref_exists() { git -C "$repo" rev-parse --verify --quiet "$1" >/dev/null; }
+report_ab() {
+  local left=$1 right=$2 ab
+  if ab="$(t3b::ahead_behind "$repo" "$left" "$right" 2>/dev/null)"; then
+    t3b::status INFO "$left vs $right: ahead ${ab% *}, behind ${ab#* }"
+  else
+    t3b::status WARN "$left vs $right: unavailable (missing ref)"
+    exit_status=1
+  fi
+}
+
+t3b::heading "Fork operations snapshot"
+t3b::status INFO "repo: $repo"
+t3b::status INFO "active branch: $(t3b::branch "$repo")"
+dirty_count="$(git -C "$repo" status --porcelain | wc -l)"
+if [[ "$dirty_count" -eq 0 ]]; then
+  t3b::status OK "working tree: clean"
+else
+  t3b::status WARN "working tree: $dirty_count changed path(s)"
+  git -C "$repo" status --short | sed 's/^/       /'
+fi
+
+report_ab main upstream/main
+report_ab "$branch" main
+if ref_exists "origin/$branch"; then report_ab "$branch" "origin/$branch"
+else t3b::status INFO "origin/$branch: not present"; fi
+
+if ref_exists "$feature"; then
+  report_ab "$feature" "$branch"
+  if ref_exists "origin/$feature"; then report_ab "$feature" "origin/$feature"
+  else t3b::status INFO "origin/$feature: not present"; fi
+else
+  t3b::status WARN "active feature missing locally: $feature"
+  exit_status=1
+fi
+
+if ref_exists main && ref_exists upstream/main; then
+  unsafe_count="$(git -C "$repo" rev-list --count upstream/main..main)"
+  if [[ "$unsafe_count" -gt 0 ]]; then
+    t3b::status FAIL "unsafe main: $unsafe_count commit(s) are not in upstream/main"
+    git -C "$repo" log --oneline upstream/main..main | sed 's/^/       /'
+    exit_status=1
+  else
+    t3b::status OK "main contains no downstream-only commits"
+  fi
+fi
+
+t3b::heading "Upstream commits not yet in main"
+if ref_exists main && ref_exists upstream/main; then
+  unseen="$(git -C "$repo" rev-list --count main..upstream/main)"
+  t3b::status INFO "$unseen commit(s)"
+  if [[ "$log_count" -gt 0 && "$unseen" -gt 0 ]]; then
+    git -C "$repo" log --oneline --decorate -n "$log_count" main..upstream/main
+  fi
+else
+  t3b::status WARN "Unavailable until main and upstream/main exist."
+fi
+
+t3b::heading "Recovery refs"
+backup_count="$(git -C "$repo" for-each-ref --format='%(refname:short)' 'refs/heads/backup/*' | wc -l)"
+t3b::status INFO "backup refs: $backup_count"
+if [[ "$backup_count" -gt 0 ]]; then
+  git -C "$repo" for-each-ref --sort=-creatordate --count=5 --format='  %(refname:short)  %(creatordate:short)' 'refs/heads/backup/*'
+fi
+
+exit "$exit_status"

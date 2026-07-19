@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# t3b-obs — safely operate the local-only Grafana LGTM observability stack.
+set -Eeuo pipefail
+
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+# shellcheck source=lib/common.sh
+source "$(dirname "$_self")/lib/common.sh"
+
+readonly MANAGED_LABEL="com.blazenetic.t3code.managed=true"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3b-obs <command> [options]
+
+  up               Create or start the managed Grafana LGTM container.
+  down             Stop it without deleting its container or data.
+  status           Report engine, ownership, state, health, ports, and URLs.
+  logs [--follow]  Show recent logs (or keep following them).
+  open             Open Grafana with xdg-open, or print its URL.
+  url              Print only the Grafana URL.
+
+All published ports bind to 127.0.0.1. A same-named container without the
+Blazenetic ownership label is never started, stopped, or inspected further.
+EOF
+}
+
+t3b::load_env
+engine="${T3B_OBS_ENGINE:-}"
+image="${T3B_OBS_IMAGE:-grafana/otel-lgtm:latest}"
+container="${T3B_OBS_CONTAINER:-t3code-blazenetic-lgtm}"
+grafana_url="${T3B_OBS_GRAFANA_URL:-http://127.0.0.1:3000}"
+grafana_port="${T3B_OBS_GRAFANA_PORT:-3000}"
+grpc_port="${T3B_OBS_OTLP_GRPC_PORT:-4317}"
+http_port="${T3B_OBS_OTLP_HTTP_PORT:-4318}"
+
+resolve_engine() {
+  if [[ -n "$engine" ]]; then
+    t3b::have "$engine" || t3b::die "Configured container engine not found: $engine"
+    return
+  fi
+  if t3b::have docker; then engine=docker
+  elif t3b::have podman; then engine=podman
+  else t3b::die "No container engine found. Install Docker/Podman or set T3B_OBS_ENGINE."
+  fi
+}
+
+exists() { "$engine" inspect "$container" >/dev/null 2>&1; }
+
+require_owned() {
+  local managed
+  managed="$("$engine" inspect --format '{{ index .Config.Labels "com.blazenetic.t3code.managed" }}' "$container" 2>/dev/null || true)"
+  [[ "$managed" == "true" ]] || t3b::die "Container '$container' is not Blazenetic-managed; refusing to operate on it. Rename it or set T3B_OBS_CONTAINER."
+}
+
+inspect_value() { "$engine" inspect --format "$1" "$container" 2>/dev/null || true; }
+
+cmd_up() {
+  resolve_engine
+  if exists; then
+    require_owned
+    local running
+    running="$(inspect_value '{{.State.Running}}')"
+    if [[ "$running" == "true" ]]; then
+      t3b::info "Grafana LGTM is already running: $container"
+    else
+      t3b::info "Starting managed container: $container"
+      "$engine" start "$container" >/dev/null
+    fi
+  else
+    local port occupied=0
+    for port in "$grafana_port" "$grpc_port" "$http_port"; do
+      if t3b::port_in_use "$port"; then
+        t3b::err "TCP port $port is already occupied; the local collector was not created."
+        occupied=1
+      fi
+    done
+    [[ "$occupied" == "0" ]] || t3b::die "Free the listed ports or configure T3B_OBS_*_PORT overrides."
+    t3b::info "Creating local-only Grafana LGTM container: $container"
+    "$engine" run -d \
+      --name "$container" \
+      --label "$MANAGED_LABEL" \
+      -p "127.0.0.1:${grafana_port}:3000" \
+      -p "127.0.0.1:${grpc_port}:4317" \
+      -p "127.0.0.1:${http_port}:4318" \
+      "$image" >/dev/null
+  fi
+  t3b::info "Grafana: $grafana_url (local machine only)"
+  t3b::info "OTLP HTTP: http://127.0.0.1:${http_port}"
+}
+
+cmd_down() {
+  resolve_engine
+  exists || t3b::die "Managed container does not exist: $container"
+  require_owned
+  if [[ "$(inspect_value '{{.State.Running}}')" == "true" ]]; then
+    "$engine" stop "$container" >/dev/null
+    t3b::info "Stopped $container. Container data was retained."
+  else
+    t3b::info "$container is already stopped. Container data is retained."
+  fi
+}
+
+cmd_status() {
+  resolve_engine
+  t3b::heading "Blazenetic observability"
+  t3b::status INFO "engine: $engine"
+  t3b::status INFO "image: $image"
+  t3b::status INFO "container: $container"
+  if ! exists; then
+    t3b::status WARN "state: not created"
+    t3b::status INFO "Grafana: $grafana_url (local machine only)"
+    return 1
+  fi
+  require_owned
+  local state health ports ready=0
+  state="$(inspect_value '{{.State.Status}}')"
+  health="$(inspect_value '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-reported{{end}}')"
+  ports="$(inspect_value '{{json .NetworkSettings.Ports}}')"
+  [[ "$state" == "running" && "$health" != "unhealthy" ]] && ready=1
+  if [[ "$ready" == "1" ]]; then t3b::status OK "state: $state"; else t3b::status WARN "state: ${state:-unknown}"; fi
+  t3b::status INFO "health: ${health:-not-reported}"
+  t3b::status INFO "mapped ports: ${ports:-unavailable}"
+  t3b::status INFO "Grafana: $grafana_url (local machine only)"
+  t3b::status INFO "OTLP gRPC: 127.0.0.1:$grpc_port"
+  t3b::status INFO "OTLP HTTP: http://127.0.0.1:$http_port"
+  [[ "$ready" == "1" ]]
+}
+
+cmd_logs() {
+  resolve_engine
+  exists || t3b::die "Managed container does not exist: $container"
+  require_owned
+  case "${1:-}" in
+    '') "$engine" logs --tail 100 "$container" ;;
+    --follow) "$engine" logs --tail 100 --follow "$container" ;;
+    *) t3b::err "Unknown logs option: $1"; usage; exit 2 ;;
+  esac
+}
+
+cmd_open() {
+  if t3b::have xdg-open; then
+    xdg-open "$grafana_url" >/dev/null 2>&1 &
+    t3b::info "Opening $grafana_url"
+  else
+    printf '%s\n' "$grafana_url"
+  fi
+}
+
+cmd="${1:-}"
+shift || true
+case "$cmd" in
+  -h|--help|'') usage ;;
+  up) [[ $# -eq 0 ]] || { usage; exit 2; }; cmd_up ;;
+  down) [[ $# -eq 0 ]] || { usage; exit 2; }; cmd_down ;;
+  status) [[ $# -eq 0 ]] || { usage; exit 2; }; cmd_status ;;
+  logs) cmd_logs "$@" ;;
+  open) [[ $# -eq 0 ]] || { usage; exit 2; }; cmd_open ;;
+  url) [[ $# -eq 0 ]] || { usage; exit 2; }; printf '%s\n' "$grafana_url" ;;
+  *) t3b::err "Unknown command: $cmd"; usage; exit 2 ;;
+esac
