@@ -21,8 +21,13 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
+import {
+  BLAZENETIC_SETTINGS_NAV_ITEMS,
+  type BlazeneticSettingsSectionPath,
+} from "../../blazenetic/settingsContributions";
 
 export type SettingsSectionPath =
+  | BlazeneticSettingsSectionPath
   | "/settings/general"
   | "/settings/keybindings"
   | "/settings/providers"
@@ -41,6 +46,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
   { label: "Connections", to: "/settings/connections", icon: Link2Icon },
   { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
+  ...BLAZENETIC_SETTINGS_NAV_ITEMS,
 ];
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {

@@ -40,6 +40,7 @@ t3b::load_env
 repo="$(t3b::repo)"
 t3b::ensure_vp
 t3b::require_deps "$repo" || t3b::die "Install dependencies before running dev."
+t3b::apply_otlp_env
 
 t3b::info "Repo:    $repo"
 t3b::info "Branch:  $(t3b::branch "$repo")"

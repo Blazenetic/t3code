@@ -107,23 +107,15 @@ git -C "$repo" switch "$branch"
 if [[ "$do_merge" -eq 1 ]]; then
   t3b::info "Merging main into $branch..."
   if ! git -C "$repo" merge --no-edit main; then
-    t3b::err "Merge conflict. Resolve, then:"
-    t3b::err "    git -C \"$repo\" status"
-    t3b::err "    git -C \"$repo\" add <resolved-files>"
-    t3b::err "    git -C \"$repo\" commit"
-    t3b::err "  or abort:  git -C \"$repo\" merge --abort"
-    t3b::err "Backup ref: $backup"
+    t3b::err "Merge conflict. Git state has been left intact for recovery."
+    t3b::print_conflict_guidance "$repo" merge "$backup"
     exit 1
   fi
 else
   t3b::info "Rebasing $branch onto main..."
   if ! git -C "$repo" rebase main; then
-    t3b::err "Rebase conflict. Resolve, then:"
-    t3b::err "    git -C \"$repo\" status"
-    t3b::err "    git -C \"$repo\" add <resolved-files>"
-    t3b::err "    git -C \"$repo\" rebase --continue"
-    t3b::err "  or abort:  git -C \"$repo\" rebase --abort"
-    t3b::err "Backup ref: $backup"
+    t3b::err "Rebase conflict. Git state has been left intact for recovery."
+    t3b::print_conflict_guidance "$repo" rebase "$backup"
     exit 1
   fi
 fi

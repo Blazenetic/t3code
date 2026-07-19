@@ -91,6 +91,47 @@ t3b::ensure_vp() {
   return 0
 }
 
+# t3b::parse_bool <value> — normalize conventional boolean values to 1 or 0.
+t3b::parse_bool() {
+  case "${1,,}" in
+    1|true|yes|on) printf '1\n' ;;
+    0|false|no|off|'') printf '0\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+# t3b::apply_otlp_env — opt a server-bearing launcher into safe local OTLP
+# defaults. Explicit application settings always win.
+t3b::apply_otlp_env() {
+  local enabled
+  if ! enabled="$(t3b::parse_bool "${T3B_OTLP:-0}")"; then
+    t3b::err "Invalid T3B_OTLP value '${T3B_OTLP}'. Use 1/0, true/false, yes/no, or on/off."
+    return 2
+  fi
+  if [[ "$enabled" == "0" ]]; then
+    t3b::info "OTLP: disabled (set T3B_OTLP=1 to use the local collector)."
+    return 0
+  fi
+
+  : "${T3CODE_OTLP_TRACES_URL:=http://127.0.0.1:4318/v1/traces}"
+  : "${T3CODE_OTLP_METRICS_URL:=http://127.0.0.1:4318/v1/metrics}"
+  : "${T3CODE_OTLP_SERVICE_NAME:=t3-blazenetic}"
+  export T3CODE_OTLP_TRACES_URL T3CODE_OTLP_METRICS_URL T3CODE_OTLP_SERVICE_NAME
+  t3b::info "OTLP: enabled (traces and metrics configured; service: $T3CODE_OTLP_SERVICE_NAME)."
+}
+
+# t3b::port_in_use <port> — true when a TCP listener already owns the port.
+t3b::port_in_use() {
+  local port=$1
+  if t3b::have ss; then
+    [[ -n "$(ss -ltnH "sport = :$port" 2>/dev/null)" ]]
+  elif t3b::have lsof; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Repository helpers
 # ---------------------------------------------------------------------------
@@ -239,6 +280,41 @@ t3b::set_feature_branch() {
   mkdir -p "$T3B_FEATURE_CONFIG_DIR"
   printf '%s\n' "$feature" > "$T3B_FEATURE_CONFIG_FILE"
   printf '%s\n' "$feature"
+}
+
+# ---------------------------------------------------------------------------
+# Sync conflict guidance
+# ---------------------------------------------------------------------------
+
+# t3b::conflict_risk <path> — advisory rebase-conflict risk classification.
+t3b::conflict_risk() {
+  case "$1" in
+    packages/contracts/*|package.json|pnpm-workspace.yaml|pnpm-lock.yaml)
+      printf 'VERY HIGH\n' ;;
+    apps/web/src/routes/settings*|apps/web/src/components/settings/SettingsSidebarNav.tsx|apps/web/src/blazenetic/*|apps/web/src/components/blazenetic/*|apps/server/src/provider/builtInDrivers.ts|apps/server/src/blazenetic/*|apps/server/src/server.ts)
+      printf 'MEDIUM\n' ;;
+    apps/web/src/components/ChatView.tsx|apps/web/src/rightPanelStore.ts|apps/web/src/components/*Sidebar*|apps/server/src/orchestration/*|apps/desktop/src/main/*|apps/desktop/src/preload/*)
+      printf 'HIGH\n' ;;
+    scripts/blazenetic/*|packaging/*|.env.blazenetic.example|.github/PULL_REQUEST_TEMPLATE/*)
+      printf 'LOW\n' ;;
+    *) printf 'MEDIUM\n' ;;
+  esac
+}
+
+# t3b::print_conflict_guidance <repo> <rebase|merge> [backup-ref...]
+t3b::print_conflict_guidance() {
+  local repo=$1 operation=$2 path backup
+  shift 2
+  t3b::err "Conflicted paths (risk is advisory):"
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    printf '    %-10s %s\n' "$(t3b::conflict_risk "$path")" "$path" >&2
+  done < <(git -C "$repo" diff --name-only --diff-filter=U)
+  t3b::err "Resolve: git -C \"$repo\" add <resolved-files>; git -C \"$repo\" $operation --continue"
+  t3b::err "Abort:   git -C \"$repo\" $operation --abort"
+  for backup in "$@"; do
+    [[ -n "$backup" ]] && t3b::err "Backup ref: $backup"
+  done
 }
 
 # ---------------------------------------------------------------------------

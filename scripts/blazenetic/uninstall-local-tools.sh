@@ -25,7 +25,7 @@ case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 BIN_DIR="$HOME/.local/bin"
 APP_DIR="$HOME/.local/share/applications"
 DESKTOP_DST="$APP_DIR/t3code-blazenetic-dev.desktop"
-WRAPPERS=(t3b t3b-web t3b-desktop t3b-sync t3b-publish t3b-feature t3b-check t3b-doctor t3b-shell)
+WRAPPERS=(t3b t3b-web t3b-server t3b-desktop t3b-obs t3b-upstream t3b-sync t3b-publish t3b-feature t3b-check t3b-doctor t3b-shell)
 
 removed=0
 for w in "${WRAPPERS[@]}"; do

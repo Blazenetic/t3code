@@ -94,31 +94,29 @@ cmd_sync() {
 Create it with:  t3b-feature start ${feature#feature/}
 Or point config at an existing branch:  t3b-feature use $feature"
 
+  # Preserve the feature tip before baseline sync changes the checked-out
+  # branch. This ref remains useful even if baseline integration stops.
+  backup_feature="backup/$(printf '%s' "$feature" | tr '/' '-')-before-sync-$(date +%Y%m%d-%H%M%S)-$$"
+  git -C "$repo" branch "$backup_feature" "$feature"
+  t3b::info "Created feature backup ref: $backup_feature"
+
   # 1–8: same upstream integration as t3b-sync (ff main, rebase/merge blazenetic).
   if [[ "$do_merge" -eq 1 ]]; then sync_args+=(--merge); fi
   if [[ "$do_check" -eq 0 ]]; then sync_args+=(--no-check); fi
   t3b::info "Running baseline upstream integration (t3b-sync${sync_args[*]:+ ${sync_args[*]}})..."
   if ! "$_dir/t3b-sync" "${sync_args[@]+"${sync_args[@]}"}"; then
-    t3b::die "Baseline sync failed. Fix that first; feature branch was not rebased."
+    t3b::err "Baseline sync failed. The feature branch was not rebased."
+    t3b::die "Feature backup ref retained: $backup_feature (also retain the baseline backup printed above)."
   fi
 
   # After t3b-sync we are on blazenetic with a clean tree (check may have run).
   t3b::require_clean "$repo" || exit 1
 
-  # Flatten feature/foo → feature-foo so the backup ref has a single path segment.
-  backup_feature="backup/$(printf '%s' "$feature" | tr '/' '-')-before-sync-$(date +%Y%m%d-%H%M%S)"
-  git -C "$repo" branch "$backup_feature" "$feature"
-  t3b::info "Created feature backup ref: $backup_feature"
-
   t3b::info "Rebasing $feature onto $branch..."
   git -C "$repo" switch "$feature"
   if ! git -C "$repo" rebase "$branch"; then
-    t3b::err "Rebase conflict on $feature. Resolve, then:"
-    t3b::err "    git -C \"$repo\" status"
-    t3b::err "    git -C \"$repo\" add <resolved-files>"
-    t3b::err "    git -C \"$repo\" rebase --continue"
-    t3b::err "  or abort:  git -C \"$repo\" rebase --abort"
-    t3b::err "Feature backup ref: $backup_feature"
+    t3b::err "Rebase conflict on $feature. Git state has been left intact for recovery."
+    t3b::print_conflict_guidance "$repo" rebase "$backup_feature"
     exit 1
   fi
   t3b::info "Feature rebase complete on $feature."
