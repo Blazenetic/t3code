@@ -42,7 +42,7 @@ t3b::require_deps "$repo" || t3b::die "Install dependencies before validating."
 cd "$repo"
 
 # Build the ordered list of steps for the selected mode.
-steps=()
+steps=("scripts/blazenetic/tests/run.sh")
 case "$mode" in
   quick)
     steps+=("vp check" "vp run typecheck") ;;
@@ -58,9 +58,8 @@ t3b::info "Repo: $repo   Mode: $mode"
 failed=""
 for step in "${steps[@]}"; do
   t3b::heading ">> $step"
-  # Intentional word-splitting: each step is a fixed, known command string.
-  # shellcheck disable=SC2086
-  if ! $step; then
+  read -r -a command <<< "$step"
+  if ! "${command[@]}"; then
     failed="$step"
     t3b::err "FAILED: $step"
     break

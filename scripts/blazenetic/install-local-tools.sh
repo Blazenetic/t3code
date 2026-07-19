@@ -36,12 +36,25 @@ CFG_DIR="$HOME/.config/t3code-blazenetic"
 DESKTOP_SRC="$REPO_ROOT/packaging/linux/t3code-blazenetic-dev.desktop"
 DESKTOP_DST="$APP_DIR/t3code-blazenetic-dev.desktop"
 
-WRAPPERS=(t3b t3b-web t3b-desktop t3b-sync t3b-publish t3b-feature t3b-check t3b-doctor t3b-shell)
+WRAPPERS=(t3b t3b-web t3b-server t3b-desktop t3b-obs t3b-upstream t3b-sync t3b-publish t3b-feature t3b-check t3b-doctor t3b-shell)
 
 t3b::info "Repo root:   $REPO_ROOT"
 t3b::info "Install dir: $BIN_DIR"
 
 mkdir -p "$BIN_DIR" "$CFG_DIR"
+
+# Seed a useful user config once. Existing operator choices are never replaced.
+ENV_SRC="$REPO_ROOT/.env.blazenetic.example"
+ENV_DST="$CFG_DIR/env"
+if [[ -e "$ENV_DST" ]]; then
+  t3b::status OK "env config retained: $ENV_DST"
+elif [[ -f "$ENV_SRC" ]]; then
+  cp "$ENV_SRC" "$ENV_DST"
+  chmod 600 "$ENV_DST"
+  t3b::status OK "env config created: $ENV_DST"
+else
+  t3b::status WARN "env example unavailable; config not created: $ENV_SRC"
+fi
 
 # --- symlink wrappers -------------------------------------------------------
 for w in "${WRAPPERS[@]}"; do

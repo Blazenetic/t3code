@@ -53,12 +53,26 @@ if [[ -d "$repo" ]] && git -C "$repo" rev-parse --is-inside-work-tree >/dev/null
   # remotes
   if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
     t3b::status OK "origin:   $(git -C "$repo" remote get-url origin)"
+    origin_push="$(git -C "$repo" remote get-url --push origin 2>/dev/null || true)"
+    if [[ "$origin_push" == *"pingdotgg/t3code"* ]]; then
+      t3b::status FAIL "origin push target is canonical upstream"
+      note "Point origin at the Blazenetic fork before publishing"
+    else
+      t3b::status OK "origin push target is not canonical upstream"
+    fi
   else
     t3b::status FAIL "origin remote missing"
     note "Add origin: git -C \"$repo\" remote add origin https://github.com/Blazenetic/t3code"
   fi
   if git -C "$repo" remote get-url upstream >/dev/null 2>&1; then
     t3b::status OK "upstream: $(git -C "$repo" remote get-url upstream)"
+    upstream_push="$(git -C "$repo" remote get-url --push upstream 2>/dev/null || true)"
+    if [[ "$upstream_push" == "no_push" ]]; then
+      t3b::status OK "upstream push guard: literal no_push"
+    else
+      t3b::status FAIL "upstream push guard is not the literal no_push sentinel"
+      note "Disable upstream push: git -C \"$repo\" remote set-url --push upstream no_push"
+    fi
   else
     t3b::status WARN "upstream remote missing"
     note "Add upstream: git -C \"$repo\" remote add upstream https://github.com/pingdotgg/t3code.git"
@@ -72,6 +86,16 @@ if [[ -d "$repo" ]] && git -C "$repo" rev-parse --is-inside-work-tree >/dev/null
   if ab="$(t3b::ahead_behind "$repo" "$(t3b::default_branch)" main 2>/dev/null)"; then
     t3b::status INFO "$(t3b::default_branch) vs main: ahead ${ab% *}, behind ${ab#* }"
   fi
+  feature="$(t3b::feature_branch)"
+  t3b::status INFO "Active feature: $feature"
+  if git -C "$repo" rev-parse --verify --quiet "$feature" >/dev/null; then
+    t3b::status OK "active feature branch exists"
+  else
+    t3b::status WARN "active feature branch is missing"
+    note "Create it with: t3b-feature start ${feature#feature/}"
+  fi
+  backup_count="$(git -C "$repo" for-each-ref --format='%(refname)' 'refs/heads/backup/*' | wc -l)"
+  t3b::status INFO "Backup refs: $backup_count"
   # workspace files
   for f in package.json pnpm-workspace.yaml apps/desktop apps/web; do
     if [[ -e "$repo/$f" ]]; then t3b::status OK "found $f"; else t3b::status WARN "missing $f"; fi
@@ -112,6 +136,45 @@ else t3b::status INFO "mise: not found (optional)"; fi
 if t3b::have shellcheck; then t3b::status OK "shellcheck: $(ver shellcheck --version | tail -n1)"
 else t3b::status INFO "shellcheck: not found (optional, for script linting)"; fi
 
+# --- Observability ---------------------------------------------------------
+t3b::heading "Observability (no endpoint values or credentials shown)"
+obs_engine="${T3B_OBS_ENGINE:-}"
+if [[ -z "$obs_engine" ]]; then
+  if t3b::have docker; then obs_engine=docker
+  elif t3b::have podman; then obs_engine=podman
+  fi
+fi
+if [[ -n "$obs_engine" ]] && t3b::have "$obs_engine"; then
+  t3b::status OK "container engine: $obs_engine"
+  obs_container="${T3B_OBS_CONTAINER:-t3code-blazenetic-lgtm}"
+  if "$obs_engine" inspect "$obs_container" >/dev/null 2>&1; then
+    managed="$("$obs_engine" inspect --format '{{ index .Config.Labels "com.blazenetic.t3code.managed" }}' "$obs_container" 2>/dev/null || true)"
+    state="$("$obs_engine" inspect --format '{{.State.Status}}' "$obs_container" 2>/dev/null || true)"
+    if [[ "$managed" == "true" ]]; then t3b::status INFO "managed LGTM container: ${state:-unknown}"
+    else t3b::status FAIL "same-named LGTM container is not Blazenetic-managed"; fi
+  else
+    t3b::status INFO "managed LGTM container: not created"
+  fi
+else
+  t3b::status WARN "container engine: unavailable"
+  note "Install Docker/Podman or set T3B_OBS_ENGINE"
+fi
+
+if otlp_enabled="$(t3b::parse_bool "${T3B_OTLP:-0}" 2>/dev/null)"; then
+  if [[ "$otlp_enabled" == "1" ]]; then t3b::status OK "T3B_OTLP: enabled"
+  else t3b::status INFO "T3B_OTLP: disabled"; fi
+else
+  t3b::status FAIL "T3B_OTLP: invalid boolean value"
+  note "Set T3B_OTLP to 1/0, true/false, yes/no, or on/off"
+fi
+[[ -n "${T3CODE_OTLP_TRACES_URL:-}" ]] && trace_state="configured" || trace_state="unset"
+[[ -n "${T3CODE_OTLP_METRICS_URL:-}" ]] && metric_state="configured" || metric_state="unset"
+t3b::status INFO "trace endpoint: $trace_state; metric endpoint: $metric_state"
+for port in 3000 4317 4318; do
+  if t3b::port_in_use "$port"; then t3b::status INFO "TCP $port: occupied"
+  else t3b::status OK "TCP $port: available"; fi
+done
+
 # --- Terminals --------------------------------------------------------------
 t3b::heading "Terminals (for the KDE launcher)"
 for term in konsole alacritty; do
@@ -149,7 +212,7 @@ else
   note "Install it: scripts/blazenetic/install-local-tools.sh"
 fi
 
-for w in t3b t3b-web t3b-desktop t3b-sync t3b-check t3b-doctor t3b-shell; do
+for w in t3b t3b-web t3b-server t3b-desktop t3b-obs t3b-upstream t3b-sync t3b-publish t3b-feature t3b-check t3b-doctor t3b-shell; do
   link="$HOME/.local/bin/$w"
   if [[ -L "$link" ]]; then
     target="$(readlink -f "$link" 2>/dev/null || true)"

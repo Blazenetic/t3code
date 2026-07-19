@@ -6,7 +6,9 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/connections"
   | "/settings/beta"
-  | "/settings/archived";
+  | "/settings/archived"
+  // Downstream: Blazenetic operator settings section.
+  | "/settings/blazenetic";
 
 export interface SettingsSearchItem {
   readonly id: string;
@@ -28,6 +30,8 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/connections": "Connections",
   "/settings/beta": "Beta",
   "/settings/archived": "Archive",
+  // Downstream: Blazenetic operator settings section.
+  "/settings/blazenetic": "Blazenetic",
 };
 
 /**
@@ -161,6 +165,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "archive",
     title: "Archived threads",
     to: "/settings/archived",
+  },
+  {
+    // Downstream: Blazenetic operator settings section.
+    id: "blazenetic",
+    title: "Blazenetic",
+    to: "/settings/blazenetic",
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;
 

@@ -42,9 +42,10 @@ import {
   type SettingsPath,
   type SettingsSearchItem,
 } from "./settingsSearch";
+import { BLAZENETIC_SETTINGS_NAV_ITEMS } from "../../blazenetic/settingsContributions";
 
-const SETTINGS_SECTION_ICONS: Readonly<
-  Record<SettingsPath, ComponentType<{ className?: string }>>
+const UPSTREAM_SETTINGS_SECTION_ICONS: Readonly<
+  Record<Exclude<SettingsPath, "/settings/blazenetic">, ComponentType<{ className?: string }>>
 > = {
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
@@ -56,15 +57,34 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/archived": ArchiveIcon,
 };
 
+const BLAZENETIC_SETTINGS_SECTION_ICONS = Object.fromEntries(
+  BLAZENETIC_SETTINGS_NAV_ITEMS.map((item) => [item.to, item.icon]),
+) as Readonly<Record<"/settings/blazenetic", ComponentType<{ className?: string }>>>;
+
+const SETTINGS_SECTION_ICONS: Readonly<
+  Record<SettingsPath, ComponentType<{ className?: string }>>
+> = {
+  ...UPSTREAM_SETTINGS_SECTION_ICONS,
+  ...BLAZENETIC_SETTINGS_SECTION_ICONS,
+};
+
+const UPSTREAM_SETTINGS_PATHS = Object.keys(UPSTREAM_SETTINGS_SECTION_ICONS) as Array<
+  Exclude<SettingsPath, "/settings/blazenetic">
+>;
+
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
   to: SettingsPath;
   icon: ComponentType<{ className?: string }>;
-}> = (Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[]).map((to) => ({
-  to,
-  label: SETTINGS_SECTION_LABELS[to],
-  icon: SETTINGS_SECTION_ICONS[to],
-}));
+}> = [
+  ...UPSTREAM_SETTINGS_PATHS.map((to) => ({
+    to,
+    label: SETTINGS_SECTION_LABELS[to],
+    icon: SETTINGS_SECTION_ICONS[to],
+  })),
+  // Downstream contributions stay last so upstream nav order is preserved.
+  ...BLAZENETIC_SETTINGS_NAV_ITEMS,
+];
 
 function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   const Icon = SETTINGS_SECTION_ICONS[to];
