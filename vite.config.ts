@@ -22,7 +22,9 @@ export default defineConfig({
   },
   staged: {
     // Formatter only for now — no lint or typecheck on commit.
-    "*": "vp fmt",
+    // Keep this to Oxfmt-known types: a shell-only stage with "*" makes
+    // `vp fmt` exit when every path is excluded (breaks scripts/**/*.sh commits).
+    "*.{js,jsx,ts,tsx,mjs,cjs,cts,mts,json,jsonc,css,md,mdx,yml,yaml,html,vue,astro}": "vp fmt",
   },
   fmt: {
     ignorePatterns: [

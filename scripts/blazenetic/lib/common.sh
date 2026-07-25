@@ -61,13 +61,34 @@ t3b::have() { command -v "$1" >/dev/null 2>&1; }
 
 # t3b::load_env — source optional wrapper env files if present. Only these two
 # well-known locations are considered; arbitrary files are never sourced.
+# Variables already set in the process environment win over file contents so
+# callers (and tests) can override with T3B_REPO=... etc.
 t3b::load_env() {
-  local f
-  for f in "$HOME/.config/t3code-blazenetic/env" "${T3B_REPO:-$HOME/Code/t3code}/.env.blazenetic"; do
+  local f var
+  local -a keep_vars=()
+  local -A keep_vals=()
+  for var in \
+    T3B_REPO T3B_BRANCH T3B_TERMINAL T3B_DEV_MODE \
+    T3B_FEATURE_BRANCH T3B_FEATURE_CONFIG_DIR T3B_FEATURE_CONFIG_FILE \
+    T3B_OTLP T3CODE_OTLP_TRACES_URL T3CODE_OTLP_METRICS_URL T3CODE_OTLP_SERVICE_NAME
+  do
+    if [[ -n "${!var+x}" ]]; then
+      keep_vars+=("$var")
+      keep_vals["$var"]="${!var}"
+    fi
+  done
+
+  local dotenv_repo="${T3B_REPO:-$HOME/Code/t3code}"
+  for f in "$HOME/.config/t3code-blazenetic/env" "$dotenv_repo/.env.blazenetic"; do
     if [[ -f "$f" ]]; then
       # shellcheck disable=SC1090  # path is a fixed, known location
       source "$f"
     fi
+  done
+
+  for var in "${keep_vars[@]}"; do
+    printf -v "$var" '%s' "${keep_vals[$var]}"
+    export "${var?}"
   done
 }
 
