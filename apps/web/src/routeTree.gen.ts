@@ -20,8 +20,8 @@ import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybi
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
-import { Route as SettingsBetaRouteImport } from './routes/settings.beta'
 import { Route as SettingsBlazeneticRouteImport } from './routes/settings.blazenetic'
+import { Route as SettingsBetaRouteImport } from './routes/settings.beta'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
@@ -82,14 +82,14 @@ const SettingsConnectionsRoute = SettingsConnectionsRouteImport.update({
   path: '/connections',
   getParentRoute: () => SettingsRoute,
 } as any)
-const SettingsBetaRoute = SettingsBetaRouteImport.update({
-  id: '/beta',
-  path: '/beta',
-  getParentRoute: () => SettingsRoute,
-} as any)
 const SettingsBlazeneticRoute = SettingsBlazeneticRouteImport.update({
   id: '/blazenetic',
   path: '/blazenetic',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsBetaRoute = SettingsBetaRouteImport.update({
+  id: '/beta',
+  path: '/beta',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
@@ -326,18 +326,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsConnectionsRouteImport
       parentRoute: typeof SettingsRoute
     }
-    '/settings/beta': {
-      id: '/settings/beta'
-      path: '/beta'
-      fullPath: '/settings/beta'
-      preLoaderRoute: typeof SettingsBetaRouteImport
-      parentRoute: typeof SettingsRoute
-    }
     '/settings/blazenetic': {
       id: '/settings/blazenetic'
       path: '/blazenetic'
       fullPath: '/settings/blazenetic'
       preLoaderRoute: typeof SettingsBlazeneticRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/beta': {
+      id: '/settings/beta'
+      path: '/beta'
+      fullPath: '/settings/beta'
+      preLoaderRoute: typeof SettingsBetaRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/archived': {
