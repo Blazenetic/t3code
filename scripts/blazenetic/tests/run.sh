@@ -35,10 +35,21 @@ test_risks() {
 
 test_help() {
   local wrapper
-  for wrapper in t3b t3b-web t3b-server t3b-desktop t3b-obs t3b-upstream t3b-sync t3b-publish t3b-feature t3b-check t3b-doctor t3b-shell; do
+  for wrapper in t3b t3b-web t3b-server t3b-desktop t3b-obs t3b-upstream t3b-sync t3b-publish t3b-feature t3b-check t3b-doctor t3b-shell t3b-agent; do
     "$SCRIPT_DIR/$wrapper" --help >/dev/null 2>&1 || fail "$wrapper --help"
   done
   ok "all wrapper help entry points"
+}
+
+test_agent_contract() {
+  local out
+  out="$(T3B_REPO="$ROOT" "$SCRIPT_DIR/t3b-agent" status)"
+  assert_contains "$out" "project: $ROOT"
+  assert_contains "$out" "active-feature:"
+  out="$("$SCRIPT_DIR/t3b-agent" handoff)"
+  assert_contains "$out" "Final Git state:"
+  assert_contains "$out" "Remaining gate and required authority:"
+  ok "agent status and handoff contract"
 }
 
 test_obs() {
@@ -160,6 +171,7 @@ printf 'TAP version 13\n'
 test_otlp
 test_risks
 test_help
+test_agent_contract
 test_obs
 test_upstream_and_feature
 test_shell_quality

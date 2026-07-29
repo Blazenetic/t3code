@@ -212,7 +212,7 @@ else
   note "Install it: scripts/blazenetic/install-local-tools.sh"
 fi
 
-for w in t3b t3b-web t3b-server t3b-desktop t3b-obs t3b-upstream t3b-sync t3b-publish t3b-feature t3b-check t3b-doctor t3b-shell; do
+for w in t3b t3b-web t3b-server t3b-desktop t3b-obs t3b-upstream t3b-sync t3b-publish t3b-feature t3b-check t3b-doctor t3b-shell t3b-agent; do
   link="$HOME/.local/bin/$w"
   if [[ -L "$link" ]]; then
     target="$(readlink -f "$link" 2>/dev/null || true)"

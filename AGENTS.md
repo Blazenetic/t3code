@@ -2,6 +2,22 @@
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs (Codex, Claude Code, Cursor, Grok, OpenCode) and serves web, desktop, and mobile clients.
 
+## Blazenetic Fork Workflow
+
+- Load the repo-native `blazenetic-t3code` skill for any work on this downstream
+  checkout. Start with `t3b-agent status` (or
+  `scripts/blazenetic/t3b-agent status`) and read `../blazenetic/README.md`.
+- `main` is an upstream mirror. Put downstream work on `blazenetic` or a
+  feature branch based on it; never push to `upstream`.
+- Prefer downstream-owned additions under `scripts/blazenetic/`,
+  `.agents/skills/`, and isolated `apps/*/src/blazenetic/` modules. Keep
+  upstream mounts thin, never edit `.repos/` or generated files, and document
+  intentional Medium-or-higher conflict risk in
+  `../blazenetic/ARCHITECTURE-NOTES.md`.
+- Run `scripts/blazenetic/t3b-agent check` for agent/tooling changes. Sync,
+  publish, packaging, deployment, commits, and external actions require their
+  own explicit authority.
+
 You can think of T3 Code as an open source "bring-your-own-subscription" alternative to apps like Claude Desktop, Codex App, Cursor Glass and Conductor.
 
 ## What makes T3 Code special?

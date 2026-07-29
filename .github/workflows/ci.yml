@@ -11,6 +11,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  downstream_agent_contract:
+    name: Downstream Agent Contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate agent contract and downstream wrappers
+        run: scripts/blazenetic/t3b-agent check
+
   check:
     name: Check
     runs-on: blacksmith-8vcpu-ubuntu-2404

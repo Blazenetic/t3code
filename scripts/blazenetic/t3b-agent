@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# t3b-agent — deterministic orientation, contract validation, and handoff aid.
+set -Eeuo pipefail
+
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+# shellcheck source=lib/common.sh
+source "$(dirname "$_self")/lib/common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3b-agent <status|check|handoff>
+  status   read-only repository, fork, and worktree snapshot
+  check    validate downstream wrappers and the repo-native agent contract
+  handoff  print the required durable handoff structure
+EOF
+}
+
+require_file() {
+  local path=$1
+  [[ -f "$path" ]] || { t3b::err "Required agent file missing: $path"; return 1; }
+}
+
+status() {
+  local repo branch dirty origin upstream feature
+  t3b::load_env
+  repo="$(t3b::repo)"
+  branch="$(t3b::branch "$repo")"
+  origin="$(git -C "$repo" remote get-url origin 2>/dev/null || printf 'missing')"
+  upstream="$(git -C "$repo" remote get-url upstream 2>/dev/null || printf 'missing')"
+  feature="$(t3b::feature_branch)"
+  dirty="$(git -C "$repo" status --porcelain)"
+
+  printf 'project: %s\nbranch: %s\nworking-tree: %s\n' \
+    "$repo" "$branch" "$([[ -n "$dirty" ]] && printf dirty || printf clean)"
+  printf 'origin: %s\nupstream: %s\nactive-feature: %s\n' "$origin" "$upstream" "$feature"
+  if git -C "$repo" show-ref --verify --quiet refs/remotes/upstream/main; then
+    read -r ahead behind < <(t3b::ahead_behind "$repo" main upstream/main)
+    printf 'main-vs-upstream/main: ahead %s, behind %s (last fetched refs)\n' "$ahead" "$behind"
+  else
+    printf 'main-vs-upstream/main: unknown (upstream/main missing)\n'
+  fi
+  printf 'worktrees:\n'
+  git -C "$repo" worktree list --porcelain
+  if [[ -n "$dirty" ]]; then
+    printf 'changed-paths:\n%s\n' "$dirty"
+  fi
+}
+
+check() {
+  local repo skill
+  t3b::load_env
+  repo="$(t3b::repo)"
+  skill="$repo/.agents/skills/blazenetic-t3code"
+  require_file "$repo/AGENTS.md"
+  require_file "$skill/SKILL.md"
+  require_file "$skill/agents/openai.yaml"
+  require_file "$skill/references/ownership-map.md"
+  grep -q '^name: blazenetic-t3code$' "$skill/SKILL.md"
+  grep -q 'Use \$blazenetic-t3code' "$skill/agents/openai.yaml"
+  grep -q 't3b-agent' "$repo/AGENTS.md"
+  "$repo/scripts/blazenetic/tests/run.sh"
+  git -C "$repo" diff --check
+  t3b::info "Agent contract and downstream wrapper checks passed."
+}
+
+handoff() {
+  cat <<'EOF'
+Outcome:
+Material paths:
+Ownership / conflict risk:
+Validation performed (exact command and result):
+Validation not run:
+Git branch and working-tree state:
+Final Git state: [committed and clean | intentionally uncommitted with handover | blocked with files preserved]
+Remaining gate and required authority:
+EOF
+}
+
+case "${1:-}" in
+  status) status ;;
+  check) check ;;
+  handoff) handoff ;;
+  -h|--help|"") usage; [[ -n "${1:-}" ]] || exit 2 ;;
+  *) t3b::err "Unknown command: $1"; usage; exit 2 ;;
+esac
