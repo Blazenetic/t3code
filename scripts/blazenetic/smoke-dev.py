@@ -36,7 +36,8 @@ def main():
                     raise RuntimeError("Development exited before becoming ready.")
                 match = re.search(r"\[dev-runner\].*?webPort=(\d+)", log.read_text())
                 if match:
-                    origin = f"http://127.0.0.1:{match[1]}"
+                    # Vite's localhost listener may resolve to IPv6 on this host.
+                    origin = f"http://localhost:{match[1]}"
                     try:
                         for path in ("/", "/.well-known/t3/environment"):
                             with opener.open(origin + path, timeout=3) as response:
