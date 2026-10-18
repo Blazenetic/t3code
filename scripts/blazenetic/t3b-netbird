@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""Downstream adapter for the native T3 service; no product patches or proxy."""
+import argparse
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+
+HOME = Path.home()
+BASE = HOME / ".local/share/t3code-netbird"
+TOOLS = HOME / ".local/lib/t3code-blazenetic"
+CONFIG = TOOLS / "netbird.json"
+DROPIN = HOME / ".config/systemd/user/t3code.service.d/50-netbird.conf"
+UNIT = HOME / ".config/systemd/user/t3code.service"
+MARKER = "# Managed by t3b-netbird"
+
+
+def run(*args, capture=False, **kwargs):
+    return subprocess.run([str(a) for a in args], check=True, text=True,
+                          capture_output=capture, **kwargs)
+
+
+def netbird_ip():
+    data = json.loads(run("netbird", "status", "--json", capture=True).stdout)
+    if data.get("management", {}).get("connected") is not True:
+        raise ValueError("NetBird management is disconnected; refusing to start.")
+    address = ipaddress.ip_interface(data["netbirdIp"]).ip
+    if address.version != 4 or address.is_loopback or address.is_unspecified or address.is_multicast or address.is_link_local:
+        raise ValueError("NetBird did not report a usable IPv4 address.")
+    return str(address)
+
+
+def quote(value):
+    # systemd expands percent specifiers even in quoted strings.
+    value = str(value)
+    if any(c in value for c in "\n\r\x00"):
+        raise ValueError("Invalid newline or NUL in systemd value")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+
+
+def render_dropin(address, port, provider_path):
+    ipaddress.IPv4Address(address)
+    if not 1024 <= port <= 65535:
+        raise ValueError("Port must be between 1024 and 65535")
+    return "\n".join([
+        MARKER, "[Unit]", "StartLimitIntervalSec=0", "[Service]", "UMask=0077",
+        f"Environment={quote('T3CODE_HOST=' + address)}",
+        f"Environment={quote('T3CODE_PORT=' + str(port))}",
+        'Environment="T3CODE_NO_BROWSER=true"',
+        f"Environment={quote('PATH=' + provider_path)}",
+        f"ExecStartPre=/usr/bin/python3 {quote(TOOLS / 't3b-netbird')} preflight",
+        "RestartSec=15", "",
+    ])
+
+
+def load_config():
+    config = json.loads(CONFIG.read_text())
+    if config.get("base") != str(BASE):
+        raise ValueError("Unexpected runtime home; refusing to operate another environment.")
+    return config
+
+
+def preflight():
+    config = load_config()
+    if netbird_ip() != config["ip"]:
+        raise ValueError("NetBird address changed; run t3b-netbird rebind before restarting.")
+    return config
+
+
+def cli(*args):
+    load_config()
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("T3CODE_", "VITE_"))}
+    env.update(T3CODE_HOME=str(BASE), T3CODE_INSTALL_BIN_DIR=str(BASE / "bin"))
+    return run(BASE / "bin/t3", *args, env=env, cwd=HOME)
+
+
+def managed(require_dropin=True):
+    load_config()
+    if require_dropin and (not DROPIN.exists() or not DROPIN.read_text().startswith(MARKER)):
+        raise ValueError("Managed NetBird drop-in is missing; refusing service operation.")
+    # Native unit carries this exact home; don't stop/update someone else's service.
+    expected = {f"Environment=T3CODE_HOME={quote(BASE)}", f"Environment=T3CODE_HOME={str(BASE).replace('%', '%%')}"}
+    if not UNIT.exists() or not expected.intersection(UNIT.read_text().splitlines()):
+        raise ValueError("The native service does not belong to the NetBird home.")
+
+
+def write_private(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".new")
+    temporary.write_text(content)
+    temporary.chmod(0o600)
+    temporary.replace(path)
+
+
+def stable_path():
+    return ":".join(str(p) for p in (
+        HOME / ".local/bin", HOME / ".vite-plus/bin", HOME / ".local/share/mise/shims",
+        HOME / ".cargo/bin", Path("/usr/local/bin"), Path("/usr/bin"), Path("/bin"),
+    ))
+
+
+def verify_listener(config):
+    effective = run("systemctl", "--user", "show", "t3code.service", "-p", "Environment", "--value", capture=True).stdout
+    values = dict(item.split("=", 1) for item in shlex.split(effective) if "=" in item)
+    if values.get("T3CODE_HOST") != config["ip"] or values.get("T3CODE_PORT") != str(config["port"]) or values.get("T3CODE_HOME") != str(BASE):
+        raise ValueError("Loaded service binding differs from configuration; repair/restart is needed.")
+    sockets = run("ss", "-H", "-ltn", f"sport = :{config['port']}", capture=True).stdout
+    addresses = [line.split()[3] for line in sockets.splitlines()]
+    expected = f"{config['ip']}:{config['port']}"
+    # A development server may use the same port on loopback independently.
+    others = [address for address in addresses if address != expected]
+    loopback = {f"127.0.0.1:{config['port']}", f"[::1]:{config['port']}"}
+    if expected not in addresses or any(address not in loopback for address in others):
+        raise ValueError("Expected one NetBird-only listener; inspect ss and service state.")
+    print("Verified: loaded service configuration and NetBird-only TCP listener.")
+
+
+def copy_tool():
+    destination = TOOLS / "t3b-netbird"
+    if Path(__file__).resolve() != destination.resolve():
+        shutil.copyfile(__file__, destination)
+    destination.chmod(0o755)
+
+
+def install_link():
+    link = HOME / ".local/bin/t3b-netbird"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if not link.exists() and not link.is_symlink():
+        link.symlink_to(TOOLS / "t3b-netbird")
+
+
+def check_link():
+    link = HOME / ".local/bin/t3b-netbird"
+    if (link.exists() or link.is_symlink()) and (not link.is_symlink() or link.resolve() != TOOLS / "t3b-netbird"):
+        raise ValueError("Existing t3b-netbird launcher belongs to another installation.")
+
+
+def install(version, port):
+    if not re.fullmatch(r"\d+\.\d+\.\d+-nightly\.\d+\.\d+", version):
+        raise ValueError("Choose an exact official nightly version (without v).")
+    if UNIT.exists() or DROPIN.exists() or CONFIG.exists():
+        raise ValueError("An installation already exists; use status/update or repair.")
+    check_link()
+    existing = run("systemctl", "--user", "show", "t3code.service", "-p", "LoadState", capture=True).stdout
+    if existing.strip() != "LoadState=not-found":
+        raise ValueError("Another t3code.service exists; refusing to replace it.")
+    address = netbird_ip()
+    provider_path = stable_path()
+    content = render_dropin(address, port, provider_path)
+    installer = Path(__file__).resolve().parents[1] / "install.sh"
+    if not installer.is_file():
+        raise ValueError("Install from scripts/blazenetic/t3b-netbird in the development checkout.")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("T3CODE_")}
+    env.update(T3CODE_VERSION=version, T3CODE_CHANNEL="nightly", T3CODE_HOME=str(BASE),
+               T3CODE_INSTALL_BIN_DIR=str(BASE / "bin"))
+    run("sh", installer, env=env)
+    TOOLS.mkdir(parents=True, exist_ok=True)
+    copy_tool()
+    write_private(CONFIG, json.dumps({"base": str(BASE), "ip": address, "port": port,
+                                     "initial_version": version, "provider_path": provider_path}, indent=2) + "\n")
+    write_private(DROPIN, content)
+    run("systemctl", "--user", "daemon-reload")
+    cli("service", "install", "--base-dir", BASE)
+    install_link()
+    print(f"Nightly service installed. URL: http://{address}:{port}")
+    print("Pair a device with: t3b-netbird pair (prints a private one-time credential).")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    setup = commands.add_parser("install", help="Install an exact nightly and start the native user service")
+    setup.add_argument("--version", required=True)
+    setup.add_argument("--port", type=int, default=13773)
+    for name in ("status", "url", "pair", "startup-link", "preflight", "start", "stop", "restart", "update", "rebind", "repair", "uninstall"):
+        commands.add_parser(name)
+    args = parser.parse_args()
+    if args.command == "install":
+        install(args.version, args.port)
+        return
+    config = load_config()
+    if args.command == "preflight":
+        preflight()
+    elif args.command == "url":
+        preflight()
+        print(f"http://{config['ip']}:{config['port']}")
+    elif args.command == "status":
+        print(f"Runtime home: {BASE}\nEndpoint: http://{config['ip']}:{config['port']}")
+        run("systemctl", "--user", "show", "t3code.service", "-p", "ActiveState", "-p", "SubState")
+        cli("--version")
+        managed()
+        preflight()
+        verify_listener(config)
+    elif args.command == "repair":
+        check_link()
+        if UNIT.exists():
+            managed(require_dropin=False)
+        elif run("systemctl", "--user", "show", "t3code.service", "-p", "LoadState", capture=True).stdout.strip() != "LoadState=not-found":
+            raise ValueError("Another native service exists; refusing repair.")
+        if DROPIN.exists() and not DROPIN.read_text().startswith(MARKER):
+            raise ValueError("Unmanaged drop-in preserved.")
+        preflight()
+        config["provider_path"] = stable_path()
+        write_private(DROPIN, render_dropin(config["ip"], config["port"], config["provider_path"]))
+        write_private(CONFIG, json.dumps(config, indent=2) + "\n")
+        copy_tool()
+        run("systemctl", "--user", "daemon-reload")
+        cli("service", "install", "--base-dir", BASE)
+        install_link()
+        print("Repair complete. Restart deliberately to apply changes to a running server.")
+    elif args.command == "rebind":
+        managed()
+        config["ip"] = netbird_ip()
+        write_private(DROPIN, render_dropin(config["ip"], config["port"], config["provider_path"]))
+        write_private(CONFIG, json.dumps(config, indent=2) + "\n")
+        run("systemctl", "--user", "daemon-reload")
+        print("Binding updated. Run t3b-netbird restart when active work has finished.")
+    elif args.command == "uninstall":
+        managed()
+        cli("service", "uninstall", "--base-dir", BASE)
+        DROPIN.unlink()
+        run("systemctl", "--user", "daemon-reload")
+        link = HOME / ".local/bin/t3b-netbird"
+        if link.is_symlink() and link.resolve() == TOOLS / "t3b-netbird":
+            link.unlink()
+        CONFIG.unlink()
+        (TOOLS / "t3b-netbird").unlink(missing_ok=True)
+        print(f"Managed service, drop-in and helper removed. All runtime versions and data preserved at {BASE}.")
+    else:
+        managed()
+        if args.command != "stop":
+            preflight()
+        if args.command == "pair":
+            cli("pair", "--base-dir", BASE)
+        elif args.command == "startup-link":
+            log = BASE / "userdata/logs/boot-service.log"
+            prefix = f"http://{config['ip']}:{config['port']}/pair#token="
+            links = re.findall(r"Pairing URL: (\S+)", log.read_text())
+            if not links or not links[-1].startswith(prefix):
+                raise ValueError("No startup link for the current endpoint found.")
+            print("Private administrative link from the latest startup; one use, expires after five minutes.")
+            print("If expired, finish active work, run t3b-netbird restart, then request it again.")
+            print(links[-1])
+        elif args.command == "update":
+            cli("update", "--channel", "nightly", "--yes", "--base-dir", BASE)
+        else:
+            run("systemctl", "--user", args.command, "t3code.service")
+
+
+if __name__ == "__main__":
+    os.umask(0o077)
+    try:
+        main()
+    except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
+        print(f"t3b-netbird: {error}", file=sys.stderr)
+        sys.exit(1)

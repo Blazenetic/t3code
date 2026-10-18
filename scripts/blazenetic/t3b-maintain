@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""Maintain the fork without switching development branches or restarting T3."""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+from datetime import datetime, timezone
+import fcntl
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import sys
+
+SYNC = runpy.run_path(str(Path(__file__).resolve().with_name("t3b-sync")))
+git = SYNC["git"]
+SyncError = SYNC["SyncError"]
+PUBLISHED_BRANCH = "chore/fork-maintenance"
+MARKER = "# Managed by t3b-maintain\n"
+DEFAULT_STATE = Path.home() / ".local/share/t3code-maintenance"
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def read_json(path):
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def save(path, data):
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(data, indent=2) + "\n")
+    temporary.replace(path)
+
+
+@contextmanager
+def locked(state):
+    state.mkdir(parents=True, exist_ok=True)
+    with (state / "lock").open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise SyncError("Maintenance is already running; try status.") from error
+        yield
+
+
+def sha(repo, ref):
+    return git("rev-parse", "--verify", ref, cwd=repo).stdout.strip()
+
+
+def ancestor(repo, old, new):
+    return git("merge-base", "--is-ancestor", old, new, cwd=repo, check=False).returncode == 0
+
+
+def ensure_unoccupied(repo, branch):
+    for tree, occupied in SYNC["worktrees"](repo):
+        if occupied == branch:
+            raise SyncError(f"{branch} is checked out in {tree}; leave it before maintenance.")
+
+
+def fetch_main(repo):
+    SYNC["verify_remotes"](repo)
+    # Fetch only the refs we use; upstream has hundreds of unrelated branches/tags.
+    for remote in ("origin", "upstream"):
+        git("fetch", "--no-tags", remote,
+            f"refs/heads/main:refs/remotes/{remote}/main", cwd=repo)
+
+
+def mirror(repo):
+    """Only fast-forward the hosted mirror. Never replace unique fork commits."""
+    SYNC["verify_remotes"](repo)
+    target = sha(repo, "upstream/main")
+    previous = sha(repo, "origin/main")
+    if not ancestor(repo, previous, target):
+        raise SyncError("origin/main has unique commits; mirror preserved for review.")
+    local = sha(repo, "main")
+    if not ancestor(repo, local, target):
+        raise SyncError("Local main has unique commits; preserved for review.")
+    if previous != target:
+        git("push", "origin", f"{target}:refs/heads/main", cwd=repo)
+    # Do not touch a checkout of main, even when clean.
+    if not any(branch == "main" for _, branch in SYNC["worktrees"](repo)):
+        git("update-ref", "refs/heads/main", target, local, cwd=repo)
+    return target
+
+
+def run_check(command, tree, log, env):
+    with log.open("a") as output:
+        output.write("\n$ " + " ".join(map(str, command)) + "\n")
+        output.flush()
+        result = subprocess.run(command, cwd=tree, env=env, stdin=subprocess.DEVNULL,
+                                stdout=output, stderr=subprocess.STDOUT, timeout=1200)
+    if result.returncode:
+        raise SyncError(f"Check failed: {' '.join(map(str, command))}; see {log}")
+
+
+def validate(tree, state):
+    env = os.environ.copy()
+    for key in list(env):
+        if key.startswith(("T3CODE_", "VITE_")):
+            env.pop(key)
+    env.update(CI="true", PYTHONDONTWRITEBYTECODE="1", T3CODE_NO_BROWSER="true")
+    log = state / "checks.log"
+    log.write_text(f"Checks started {now()}\n")
+    run_check(["bash", "scripts/blazenetic/t3b-agent", "check"], tree, log, env)
+    vp = str(Path.home() / ".vite-plus/bin/vp")
+    run_check([vp, "i", "--frozen-lockfile"], tree, log, env)
+    run_check([sys.executable, "scripts/blazenetic/smoke-dev.py"], tree, log, env)
+
+
+def prepare(repo, state, *, publish_main=False, validator=validate):
+    fetch_main(repo)
+    target = mirror(repo) if publish_main else sha(repo, "upstream/main")
+    base = sha(repo, "blazenetic")
+    tree = state / "candidate"
+    record = read_json(state / "status.json")
+    if tree.exists():
+        if SYNC["dirty"](tree) or SYNC["operation_in_progress"](tree):
+            raise SyncError(f"Candidate has unfinished work; preserved at {tree}.")
+        if SYNC["current_branch"](tree) is not None or sha(tree, "HEAD") != record.get("candidate"):
+            raise SyncError(f"Candidate was changed outside maintenance; preserved at {tree}.")
+        if record.get("base") == base and record.get("upstream") == target and record.get("result") == "ready":
+            record["checked_at"] = now()
+            save(state / "status.json", record)
+            print("Already prepared and checked; no dependency reinstall needed.")
+            return record
+        git("switch", "--detach", base, cwd=tree)
+    else:
+        git("worktree", "add", "--detach", str(tree), base, cwd=repo)
+    record = dict(result="preparing", checked_at=now(), base=base, upstream=target,
+                  candidate=base, path=str(tree))
+    save(state / "status.json", record)
+    merged = git("merge", "--no-edit", target, cwd=tree, check=False)
+    if merged.returncode:
+        record["result"] = "conflict"
+        save(state / "status.json", record)
+        raise SyncError(f"Merge conflict preserved at {tree}; daily app and feature branches untouched.")
+    record["candidate"] = sha(tree, "HEAD")
+    save(state / "status.json", record)
+    try:
+        validator(tree, state)
+        if SYNC["dirty"](tree):
+            raise SyncError("Validation changed tracked/untracked files; candidate preserved for review.")
+    except Exception:
+        record["result"] = "checks-failed"
+        save(state / "status.json", record)
+        raise
+    # A real ref keeps a checked merge recoverable when the worktree is refreshed.
+    git("update-ref", "refs/heads/maintenance/ready", record["candidate"], cwd=repo)
+    record.update(result="ready", checked_at=now())
+    save(state / "status.json", record)
+    print("Fork update prepared and checked. Run t3b-maintain update when ready to adopt it.")
+    return record
+
+
+def accept(repo, state):
+    SYNC["verify_remotes"](repo)
+    record = read_json(state / "status.json")
+    tree = state / "candidate"
+    if record.get("result") != "ready":
+        raise SyncError("No checked update is ready; run t3b-maintain prepare.")
+    if SYNC["dirty"](tree) or SYNC["operation_in_progress"](tree) or sha(tree, "HEAD") != record["candidate"]:
+        raise SyncError("Candidate changed after validation; preserved for review.")
+    ensure_unoccupied(repo, "blazenetic")
+    if sha(repo, "blazenetic") != record["base"]:
+        raise SyncError("blazenetic changed since validation; prepare again.")
+    if not ancestor(repo, record["base"], record["candidate"]):
+        raise SyncError("Candidate would rewrite downstream history; refusing.")
+    backup = SYNC["backup_name"](repo, "blazenetic", datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
+    git("branch", backup, record["base"], cwd=repo)
+    git("update-ref", "refs/heads/blazenetic", record["candidate"], record["base"], cwd=repo)
+    print(f"Local blazenetic updated. Backup: {backup}. Your working branch was not switched.")
+
+
+def publish(repo):
+    SYNC["verify_remotes"](repo)
+    # A fresh maintained branch avoids rewriting the historical GitHub branches.
+    git("push", "origin", f"refs/heads/blazenetic:refs/heads/{PUBLISHED_BRANCH}", cwd=repo)
+    print(f"Saved to your fork: {PUBLISHED_BRANCH}. Historical branches preserved.")
+
+
+def status(repo, state):
+    print(f"Development repository: {repo}\nDaily app: official nightly, updated in the app")
+    print(f"Maintained fork branch: {PUBLISHED_BRANCH}")
+    record = read_json(state / "status.json")
+    if record:
+        print(json.dumps(record, indent=2))
+    else:
+        print("No update has been prepared yet.")
+    failure = read_json(state / "failure.json")
+    if failure:
+        print(f"Last attempt failed {failure['at']}: {failure['error']}")
+    print(f"Check output: {state / 'checks.log'}")
+    subprocess.run(["systemctl", "--user", "is-enabled", "t3b-maintain.timer"], check=False)
+
+
+def unit_quote(value):
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
+
+
+def install(repo, state):
+    SYNC["verify_remotes"](repo)
+    # Run a copied tool: daily maintenance remains available on other dev branches.
+    installed = Path.home() / ".local/lib/t3code-blazenetic"
+    units = Path.home() / ".config/systemd/user"
+    unit_paths = [units / f"t3b-maintain.{suffix}" for suffix in ("service", "timer")]
+    for path in unit_paths:
+        if path.exists() and not path.read_text().startswith(MARKER):
+            raise SyncError(f"Preserving unmanaged unit: {path}")
+    for name in ("t3b-maintain", "t3b-sync"):
+        path = installed / name
+        if path.exists() and b"Blazenetic" not in path.read_bytes() and b"Maintain the fork" not in path.read_bytes():
+            raise SyncError(f"Preserving unmanaged tool: {path}")
+    installed.mkdir(parents=True, exist_ok=True)
+    units.mkdir(parents=True, exist_ok=True)
+    for name in ("t3b-maintain", "t3b-sync"):
+        source = Path(__file__).resolve().with_name(name)
+        if source != (installed / name).resolve():
+            shutil.copyfile(source, installed / name)
+        (installed / name).chmod(0o755)
+    command = " ".join(unit_quote(part) for part in (
+        installed / "t3b-maintain", "--repo", repo, "--state-dir", state, "run"))
+    unit_paths[0].write_text(MARKER + "[Unit]\nDescription=Prepare T3 fork updates without interrupting nightly\n"
+        "[Service]\nType=oneshot\nUMask=0077\nTimeoutStartSec=45min\n"
+        f"Environment=PATH={Path.home()}/.vite-plus/bin:{Path.home()}/.local/bin:/usr/local/bin:/usr/bin:/bin\n"
+        "Environment=GIT_TERMINAL_PROMPT=0\nEnvironment=PYTHONDONTWRITEBYTECODE=1\n"
+        f"ExecStart={command}\n")
+    unit_paths[1].write_text(MARKER + "[Unit]\nDescription=Daily T3 fork maintenance\n[Timer]\n"
+        "OnCalendar=*-*-* 09:20:00\nRandomizedDelaySec=20min\nPersistent=true\n"
+        "[Install]\nWantedBy=timers.target\n")
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", "--now", "t3b-maintain.timer"], check=True)
+    print("Daily maintenance enabled. Run: t3b-maintain status. Pause: systemctl --user disable --now t3b-maintain.timer")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path)
+    parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE)
+    parser.add_argument("command", nargs="?", default="status",
+                        choices=("status", "prepare", "update", "publish", "install", "run"))
+    args = parser.parse_args()
+    config = read_json(args.state_dir / "config.json")
+    repo = args.repo or Path(config.get("repo", Path.cwd()))
+    try:
+        repo = SYNC["repository_root"](repo)
+        if args.command == "status":
+            status(repo, args.state_dir)
+            return 0
+        with locked(args.state_dir):
+            if args.command == "install":
+                install(repo, args.state_dir)
+                save(args.state_dir / "config.json", {"repo": str(repo)})
+            elif args.command == "publish":
+                publish(repo)
+            else:
+                prepare(repo, args.state_dir, publish_main=args.command == "run")
+                if args.command == "update":
+                    accept(repo, args.state_dir)
+                    publish(repo)
+            (args.state_dir / "failure.json").unlink(missing_ok=True)
+    except (SyncError, OSError, ValueError, subprocess.SubprocessError) as error:
+        if args.command != "status":
+            args.state_dir.mkdir(parents=True, exist_ok=True)
+            save(args.state_dir / "failure.json", {"at": now(), "error": str(error)})
+        print(f"t3b-maintain: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    os.umask(0o077)
+    raise SystemExit(main())

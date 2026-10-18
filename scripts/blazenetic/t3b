@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Downstream development only; the daily server is managed by t3b-netbird.
+set -euo pipefail
+name=$(basename "$0")
+root=$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)
+case "$name" in
+  t3b|t3b-web) mode=dev ;;
+  t3b-desktop) mode=dev:desktop ;;
+  t3b-server) mode=dev:server ;;
+  *) printf 'Unknown development launcher: %s\n' "$name" >&2; exit 2 ;;
+esac
+if [[ ${1:-} == --help ]]; then
+  printf '%s: vp run %s using checkout-local .t3 state.\n' "$name" "$mode"
+  printf 'Additional dev-runner arguments are passed through. Daily use: t3b-netbird.\n'
+  exit 0
+fi
+for arg in "$@"; do
+  case "$arg" in
+    --home-dir|--home-dir=*) echo 'Use native vp commands for a deliberate alternate development home.' >&2; exit 2 ;;
+  esac
+done
+cd "$root"
+export PATH="$HOME/.vite-plus/bin:$PATH"
+unset T3CODE_HOME VITE_HTTP_URL VITE_WS_URL VITE_DEV_SERVER_URL
+printf 'Development checkout: %s (%s)\n' "$root" "$(git branch --show-current)"
+exec vp run "$mode" --home-dir "$root/.t3" "$@"

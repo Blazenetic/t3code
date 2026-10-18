@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""Safely refresh the Blazenetic fork from already-reviewed Git remotes."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
+
+
+EXPECTED_REMOTES = {
+    "origin": ("github.com", "blazenetic", "t3code"),
+    "upstream": ("github.com", "pingdotgg", "t3code"),
+}
+IN_PROGRESS_MARKERS = (
+    "rebase-apply",
+    "rebase-merge",
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "BISECT_LOG",
+    "sequencer",
+)
+
+
+class SyncError(RuntimeError):
+    pass
+
+
+def git(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        ["git", "--no-optional-locks", *args],
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if check and result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise SyncError(f"git {' '.join(args)} failed: {detail}")
+    return result
+
+
+def config_values(repo: Path, key: str) -> list[str]:
+    result = git("config", "--get-all", key, cwd=repo, check=False)
+    if result.returncode not in (0, 1):
+        raise SyncError(result.stderr.strip() or f"cannot read {key}")
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def remote_identity(url: str) -> tuple[str, str, str] | None:
+    value = url.rstrip("/")
+    if value.endswith(".git"):
+        value = value[:-4]
+    if "://" in value:
+        parsed = urlparse(value)
+        if parsed.scheme not in ("https", "ssh", "git"):
+            return None
+        host = (parsed.hostname or "").lower()
+        parts = [part for part in parsed.path.split("/") if part]
+    elif ":" in value:
+        host_part, path = value.rsplit(":", 1)
+        host = host_part.rsplit("@", 1)[-1].lower()
+        parts = [part for part in path.split("/") if part]
+    else:
+        return None
+    if len(parts) != 2:
+        return None
+    return host, parts[0].lower(), parts[1].lower()
+
+
+def verify_remotes(repo: Path) -> None:
+    for name, expected in EXPECTED_REMOTES.items():
+        urls = config_values(repo, f"remote.{name}.url")
+        if not urls or any(remote_identity(url) != expected for url in urls):
+            shown = ", ".join(urls) if urls else "missing"
+            raise SyncError(f"refusing unsafe {name} fetch URL: {shown}")
+
+    origin_push = config_values(repo, "remote.origin.pushurl")
+    if origin_push and any(
+        remote_identity(url) != EXPECTED_REMOTES["origin"] for url in origin_push
+    ):
+        raise SyncError("refusing unsafe origin push URL")
+
+    upstream_push = config_values(repo, "remote.upstream.pushurl")
+    if upstream_push != ["no_push"]:
+        shown = ", ".join(upstream_push) if upstream_push else "not configured"
+        raise SyncError(
+            "refusing: upstream push URL must be exactly 'no_push' "
+            f"(found {shown})"
+        )
+
+
+def repository_root(start: Path) -> Path:
+    result = git("rev-parse", "--show-toplevel", cwd=start, check=False)
+    if result.returncode:
+        raise SyncError("not inside a Git working tree")
+    return Path(result.stdout.strip()).resolve()
+
+
+def current_branch(repo: Path) -> str | None:
+    result = git("symbolic-ref", "--quiet", "--short", "HEAD", cwd=repo, check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def worktrees(repo: Path) -> list[tuple[Path, str | None]]:
+    records: list[tuple[Path, str | None]] = []
+    path: Path | None = None
+    branch: str | None = None
+    for line in git("worktree", "list", "--porcelain", cwd=repo).stdout.splitlines() + [""]:
+        if not line:
+            if path is not None:
+                records.append((path.resolve(), branch))
+            path, branch = None, None
+        elif line.startswith("worktree "):
+            path = Path(line.removeprefix("worktree "))
+        elif line.startswith("branch refs/heads/"):
+            branch = line.removeprefix("branch refs/heads/")
+    return records
+
+
+def operation_in_progress(tree: Path) -> str | None:
+    for marker in IN_PROGRESS_MARKERS:
+        marker_path = git("rev-parse", "--git-path", marker, cwd=tree).stdout.strip()
+        resolved = Path(marker_path)
+        if not resolved.is_absolute():
+            resolved = tree / resolved
+        if resolved.exists():
+            return marker
+    return None
+
+
+def dirty(tree: Path) -> bool:
+    return bool(git("status", "--porcelain", "--untracked-files=normal", cwd=tree).stdout)
+
+
+def guard_idle_worktrees(repo: Path, *, applying: bool) -> None:
+    here = repo.resolve()
+    occupied: dict[str, Path] = {}
+    for tree, branch in worktrees(repo):
+        marker = operation_in_progress(tree)
+        if marker:
+            raise SyncError(f"refusing: Git operation {marker} is active in {tree}")
+        if branch:
+            occupied[branch] = tree
+        if applying and tree != here and dirty(tree):
+            raise SyncError(f"refusing: another worktree has changes: {tree}")
+    if applying:
+        for branch in ("main", "blazenetic"):
+            if branch in occupied and occupied[branch] != here:
+                raise SyncError(
+                    f"refusing: {branch} is checked out in another worktree: "
+                    f"{occupied[branch]}"
+                )
+
+
+def require_ref(repo: Path, ref: str) -> None:
+    if git("show-ref", "--verify", "--quiet", ref, cwd=repo, check=False).returncode:
+        raise SyncError(f"required ref is missing: {ref}")
+
+
+def ahead_behind(repo: Path, left: str, right: str) -> str:
+    result = git("rev-list", "--left-right", "--count", f"{left}...{right}", cwd=repo)
+    left_count, right_count = result.stdout.split()
+    return f"{left_count} ahead, {right_count} behind"
+
+
+def status(repo: Path) -> None:
+    verify_remotes(repo)
+    guard_idle_worktrees(repo, applying=False)
+    branch = current_branch(repo) or "(detached)"
+    print(f"repository: {repo}")
+    print(f"branch: {branch}")
+    print(f"working tree: {'dirty' if dirty(repo) else 'clean'}")
+    print("Freshness: cached refs only; run t3b-sync fetch before comparing with upstream.")
+    for ref in ("refs/heads/main", "refs/heads/blazenetic", "refs/remotes/upstream/main"):
+        require_ref(repo, ref)
+    print(f"main vs upstream/main: {ahead_behind(repo, 'main', 'upstream/main')}")
+    print(f"blazenetic vs main: {ahead_behind(repo, 'blazenetic', 'main')}")
+    if branch.startswith("feature/"):
+        print(f"{branch} vs blazenetic: {ahead_behind(repo, branch, 'blazenetic')}")
+    print("mode: read-only; no fetch or integration performed")
+
+
+def fetch(repo: Path) -> None:
+    verify_remotes(repo)
+    guard_idle_worktrees(repo, applying=False)
+    for remote in ("origin", "upstream"):
+        print(f"fetching {remote}...")
+        result = subprocess.run(["git", "fetch", "--prune", remote], cwd=repo)
+        if result.returncode:
+            raise SyncError(f"fetch from {remote} failed")
+    print("fetch complete; no local branch was integrated or pushed")
+
+
+def backup_name(repo: Path, branch: str, timestamp: str) -> str:
+    stem = branch.replace("/", "-")
+    candidate = f"backup/{stem}-before-sync-{timestamp}"
+    suffix = 2
+    while git("show-ref", "--verify", "--quiet", f"refs/heads/{candidate}", cwd=repo, check=False).returncode == 0:
+        candidate = f"backup/{stem}-before-sync-{timestamp}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def apply(repo: Path) -> None:
+    raise SyncError(
+        "Legacy branch rebasing is retired. Use t3b-maintain prepare, then "
+        "t3b-maintain update to adopt a checked merge without rewriting history."
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Inspect, fetch, or apply the guarded Blazenetic fork sync"
+    )
+    parser.add_argument("command", nargs="?", choices=("status", "fetch", "apply"), default="status")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        repo = repository_root(Path.cwd())
+        {"status": status, "fetch": fetch, "apply": apply}[args.command](repo)
+    except SyncError as error:
+        print(f"t3b-sync: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

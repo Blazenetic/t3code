@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)
+cd "$root"
+case "${1:-status}" in
+  status)
+    git status --short --branch
+    git log -1 --format='%h %s'
+    git worktree list
+    printf '\nRemote boundaries:\n'
+    git remote -v
+    printf '\nRuntime: t3b-netbird status (daily runtime is outside this checkout).\n'
+    ;;
+  check)
+    for file in t3b t3b-agent t3b-check install-local-tools.sh; do bash -n "scripts/blazenetic/$file"; done
+    if command -v shellcheck >/dev/null; then
+      shellcheck scripts/blazenetic/t3b scripts/blazenetic/t3b-agent scripts/blazenetic/t3b-check scripts/blazenetic/install-local-tools.sh
+    fi
+    python3 -c 'import ast,pathlib; [ast.parse(pathlib.Path("scripts/blazenetic", name).read_text(), filename=name) for name in ("t3b-netbird", "t3b-sync", "t3b-maintain", "smoke-dev.py", "install-nightly-desktop.py")]'
+    test -s .agents/skills/blazenetic-t3code/SKILL.md
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/blazenetic/tests -p 'test*.py'
+    git diff --check
+    ;;
+  handoff)
+    "$0" status
+    printf '\nRecord in the local project hub: outcome; authority and changed paths; exact checks; unrun checks; daily runtime state; remaining gates.\n'
+    printf 'Git state: committed and clean / intentionally uncommitted with handover / blocked with files preserved.\n'
+    ;;
+  *) echo 'Usage: t3b-agent [status|check|handoff]' >&2; exit 2 ;;
+esac
