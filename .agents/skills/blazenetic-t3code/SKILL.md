@@ -5,9 +5,15 @@ description: Develop and operate the Blazenetic T3 Code fork, its isolated devel
 
 # Blazenetic T3 Code
 
-Read workspace and repository AGENTS.md, then `../blazenetic/README.md` and
-`../projects/blazeprovements/README.md`. In linked worktrees use the manual
-beside the main checkout. Run `scripts/blazenetic/t3b-agent status`.
+Read repository AGENTS.md and the portable
+[tooling README](../../../scripts/blazenetic/README.md). On the configured host,
+also read workspace AGENTS.md, `../blazenetic/README.md` and
+`../projects/blazeprovements/README.md`. In linked worktrees locate the main
+checkout with `git worktree list --porcelain` and use its sibling manual/hub.
+Fresh clones and cloud agents may lack those local records and installed tools;
+report that limitation and use the current user's task as authority. Never infer
+permission to install host services or access daily state from the README.
+Run `scripts/blazenetic/t3b-agent status` from the chosen checkout.
 
 Current-session implementation requests authorize their bounded local changes.
 Reviews remain read-only. Report branch, dirty paths, authority, ownership,
@@ -44,6 +50,8 @@ adopts a downstream candidate or restarts the daily app. Conflicts and failed
 checks remain visible in t3b-maintain status. Refresh the installed tool with
 `scripts/blazenetic/t3b-maintain install` from the reviewed checkout after
 maintenance-tool changes; the normal t3b-maintain command runs an installed copy.
+Documentation-only changes need no reinstall. `status` reads local records and
+does not fetch; a ready record applies only to its recorded base/upstream commits.
 
 `t3b-sync status` uses cached refs; `fetch` refreshes refs. Legacy rebasing via
 `apply` is retired. Preserve historical origin/blazenetic and
@@ -51,6 +59,8 @@ origin/feature/blazeprovements; the maintained branch is
 origin/chore/fork-maintenance. Routine main mirroring and publication to that
 branch were authorized on 2026-10-18. Never force-push, push upstream,
 change remotes, publish releases, or create a PR without separate authority.
+This maintenance authority does not approve unrelated product features or their
+integration. Start new work from an accepted task and verify its own scope/gate.
 
 Use `t3b-agent handoff` and the session-closeout skill at closeout. Record exact
 validation, limitations, final Git state, and remaining actions in the local
