@@ -218,6 +218,11 @@ def install(repo, state):
     # Run a copied tool: daily maintenance remains available on other dev branches.
     installed = Path.home() / ".local/lib/t3code-blazenetic"
     units = Path.home() / ".config/systemd/user"
+    launcher = Path.home() / ".local/bin/t3b-maintain"
+    if launcher.exists() or launcher.is_symlink():
+        allowed = {Path(__file__).resolve(), (installed / "t3b-maintain").resolve()}
+        if not launcher.is_symlink() or launcher.resolve() not in allowed:
+            raise SyncError(f"Preserving unmanaged command: {launcher}")
     unit_paths = [units / f"t3b-maintain.{suffix}" for suffix in ("service", "timer")]
     for path in unit_paths:
         if path.exists() and not path.read_text().startswith(MARKER):
@@ -233,6 +238,10 @@ def install(repo, state):
         if source != (installed / name).resolve():
             shutil.copyfile(source, installed / name)
         (installed / name).chmod(0o755)
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    if launcher.is_symlink():
+        launcher.unlink()
+    launcher.symlink_to(installed / "t3b-maintain")
     command = " ".join(unit_quote(part) for part in (
         installed / "t3b-maintain", "--repo", repo, "--state-dir", state, "run"))
     unit_paths[0].write_text(MARKER + "[Unit]\nDescription=Prepare T3 fork updates without interrupting nightly\n"

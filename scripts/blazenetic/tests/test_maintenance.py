@@ -146,6 +146,16 @@ class MaintenanceTests(unittest.TestCase):
                 M["install"](f.repo, self.state)
         self.assertEqual(unit.read_text(), "unrelated user service\n")
 
+    def test_install_preserves_unmanaged_command(self):
+        f = Fixture(self.root)
+        fake_home = self.root / "home"
+        launcher = fake_home / ".local/bin/t3b-maintain"
+        write(launcher, "unrelated executable\n")
+        with mock.patch.object(Path, "home", return_value=fake_home):
+            with self.assertRaisesRegex(M["SyncError"], "unmanaged command"):
+                M["install"](f.repo, self.state)
+        self.assertEqual(launcher.read_text(), "unrelated executable\n")
+
 
 if __name__ == "__main__":
     unittest.main()

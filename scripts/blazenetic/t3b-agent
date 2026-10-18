@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)
+if checkout=$(git rev-parse --show-toplevel 2>/dev/null) &&
+  [[ $(git rev-parse --path-format=absolute --git-common-dir) == $(git -C "$root" rev-parse --path-format=absolute --git-common-dir) ]]; then
+  root=$checkout
+fi
 cd "$root"
 case "${1:-status}" in
   status)
