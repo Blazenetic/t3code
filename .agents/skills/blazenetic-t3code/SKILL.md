@@ -42,7 +42,8 @@ The installed daily t3b-maintain.timer runs a copied tool outside Git. Its `run`
 command may only fast-forward origin/main and an unoccupied local main; it never
 adopts a downstream candidate or restarts the daily app. Conflicts and failed
 checks remain visible in t3b-maintain status. Refresh the installed tool with
-`t3b-maintain install` after reviewing maintenance-tool changes.
+`scripts/blazenetic/t3b-maintain install` from the reviewed checkout after
+maintenance-tool changes; the normal t3b-maintain command runs an installed copy.
 
 `t3b-sync status` uses cached refs; `fetch` refreshes refs. Legacy rebasing via
 `apply` is retired. Preserve historical origin/blazenetic and
